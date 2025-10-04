@@ -1,0 +1,17 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+scapy
+tensorflow
+torch
+streamlit
+imbalanced-learn
+jupyterp
+joblib 
+pyyaml 
+paho-mqtt 
+fastapi 
+uvicorn
+plotly

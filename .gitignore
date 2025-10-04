@@ -1,0 +1,19 @@
+# Virtual environment
+venv/
+.env
+
+# Data and models
+data/
+trained_models/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
