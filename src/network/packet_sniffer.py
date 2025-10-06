@@ -13,16 +13,18 @@ def format_payload(raw_data, length=16):
     return "\n".join(result)
 
 def packet_callback(packet):
-
-    # Forward packet to analyzer
-    analyse_packet(packet)
+    try:
+        # Forward packet to analyzer
+        _ = analyse_packet(packet)  # discard any returned data
+    except Exception as e:
+        print(f"[packet_callback] Error forwarding to analyzer: {e}")
+        return None
 
     if Ether in packet:
         eth = packet[Ether]
         print("\n=== Ethernet Frame ===")
         print(f"Destination: {eth.dst}, Source: {eth.src}, Protocol: {eth.type}")
 
-        # IPv4
         if IP in packet:
             ip = packet[IP]
             print("\n--- IPv4 Packet ---")
@@ -51,7 +53,6 @@ def packet_callback(packet):
                 print("\n>>> ICMP Packet <<<")
                 print(f"Type: {icmp.type}, Code: {icmp.code}, Checksum: {icmp.chksum}")
 
-        # IPv6
         elif IPv6 in packet:
             ipv6 = packet[IPv6]
             print("\n--- IPv6 Packet ---")
@@ -60,11 +61,19 @@ def packet_callback(packet):
         else:
             print("\n(No IP layer found)")
 
+    return None 
+
 def main():
     try:
         sniff(filter="tcp or udp or icmp", prn=packet_callback, store=False)
+    except ValueError as e:
+        print(f"[!] Sniff error: {e}")
+        import traceback
+        traceback.print_exc()  # Print full stack trace for details
     except KeyboardInterrupt:
         print("\n[!] Stopping packet sniffer.")
+    except Exception as e:
+        print(f"[!] Unexpected error: {e}")
 
 if __name__ == "__main__":
     main()

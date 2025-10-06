@@ -1,23 +1,46 @@
-from scapy.all import IP, TCP, UDP, sniff
-import numpy as np
+import os
 import time
 import threading
 import subprocess
+import logging
+import json
 from collections import defaultdict
+from logging.handlers import RotatingFileHandler
+from threading import Lock
+from scapy.all import IP, TCP, UDP, sniff
 
 from src.models.predict import predict_threat
-from src.data_processing.feature_engineer import engineer_features
+from src.data_processing.feature_engineer import engineer_features_from_flow
 from src.iot_security.device_profiler import DeviceProfiler
 
-# Track flows by (src, dst, port, proto)
-flows = defaultdict(lambda: {
-    'packets': [],
-    'start_time': None,
-    'bytes': 0
-})
 
+# === Ensure log directory exists ===
+os.makedirs("logs", exist_ok=True)
+
+# === JSON-based alert logger setup ===
+log_lock = Lock()
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created)),
+            "level": record.levelname,
+            "message": record.getMessage(),
+        }
+        return json.dumps(log_record)
+
+alert_logger = logging.getLogger("alert_logger")
+alert_logger.setLevel(logging.INFO)
+
+handler = RotatingFileHandler("logs/alerts.jsonl", maxBytes=1_000_000, backupCount=5)
+handler.setFormatter(JsonFormatter())
+alert_logger.addHandler(handler)
+
+
+# === Flow tracking setup ===
+flows = defaultdict(lambda: {'packets': [], 'start_time': None, 'bytes': 0})
 alerts = []
-profiler = DeviceProfiler()   # ✅ properly instantiated
+profiler = DeviceProfiler()   # properly instantiated
 
 
 def extract_live_features(flow):
@@ -27,53 +50,71 @@ def extract_live_features(flow):
 
     duration = time.time() - flow['start_time']
     pkt_count = len(flow['packets'])
-    avg_pkt_size = flow['bytes'] / pkt_count if pkt_count else 0
 
-    # Placeholder: you can add IAT, flags, etc.
-    features = [duration, pkt_count, avg_pkt_size]
-    return np.array(features).reshape(1, -1), duration, pkt_count
+    # Full CICIDS-style feature engineering
+    features_df = engineer_features_from_flow(flow['packets'])
+
+    return features_df, duration, pkt_count
 
 
 def analyse_packet(packet):
     """Process a single packet into flows and run threat detection."""
-    if IP in packet:
-        # Flow key = (src IP, dst IP, sport, protocol)
-        sport = packet[TCP].sport if TCP in packet else packet[UDP].sport if UDP in packet else 0
-        key = (packet[IP].src, packet[IP].dst, sport, packet[IP].proto)
+    try:
+        if IP in packet:
+            sport = (
+                packet[TCP].sport if TCP in packet
+                else packet[UDP].sport if UDP in packet
+                else 0
+            )
+            key = (packet[IP].src, packet[IP].dst, sport, packet[IP].proto)
 
-        flow = flows[key]
+            flow = flows[key]
 
-        # Initialize flow start time
-        if flow['start_time'] is None:
-            flow['start_time'] = time.time()
+            if flow['start_time'] is None:
+                flow['start_time'] = time.time()
 
-        flow['packets'].append(packet)
-        flow['bytes'] += len(packet)
+            flow['packets'].append(packet)
+            flow['bytes'] += len(packet)
 
-        # IoT device profiling
-        profiler.profile_device(key[0], len(packet))
+            profiler.profile_device(key[0], len(packet))
 
-        # Process every 10 packets in a flow
-        if len(flow['packets']) % 10 == 0:
-            features, duration, pkt_count = extract_live_features(flow)
-            if features is not None:
-                threat, severity = predict_threat(features)
+            # Analyze every 10 packets in this flow
+            if len(flow['packets']) % 10 == 0:
+                result = extract_live_features(flow)
+                if result is not None:
+                    features, duration, pkt_count = result
+                    threat, severity = predict_threat(features)
 
-                if threat != 'BENIGN':
-                    alert = {
-                        'time': time.time(),
-                        'src': key[0],
-                        'dst': key[1],
-                        'threat': threat,
-                        'severity': severity,
-                        'context': f'Packets: {pkt_count}, Rate: {pkt_count/duration:.2f}/s'
-                    }
-                    alerts.append(alert)
-                    print(f"[!] ALERT: {alert}")  # Debug output
+                    if threat != 'BENIGN':
+                        alert = {
+                            'time': time.time(),
+                            'src': key[0],
+                            'dst': key[1],
+                            'threat': threat,
+                            'severity': severity,
+                            'context': f'Packets: {pkt_count}, Rate: {pkt_count/duration:.2f}/s'
+                        }
+                        alerts.append(alert)
 
-                    # Defensive action if threat is high severity
-                    if severity.lower() == 'high':
-                        subprocess.run(['sudo', 'iptables', '-A', 'INPUT', '-s', key[0], '-j', 'DROP'])
+                        # Thread-safe JSON logging
+                        with log_lock:
+                            alert_logger.info(alert)
+
+                        print(f"[!] ALERT: {alert}")
+
+                        # Defensive action for high severity
+                        if severity and severity.lower() == 'high':
+                            subprocess.run(
+                                ['sudo', 'iptables', '-A', 'INPUT', '-s', key[0], '-j', 'DROP']
+                            )
+                    else:
+                        print("Normal")
+
+        return None  # Always return None so Scapy doesn't try to unpack
+
+    except Exception as e:
+        print(f"[analyse_packet] Error: {e}")
+        return None
 
 
 def start_analyzer(interface='eth0'):
