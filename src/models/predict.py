@@ -1,3 +1,5 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow INFO, WARNING, ERROR
 from tensorflow.keras.models import load_model
 import joblib
 import numpy as np
@@ -47,14 +49,14 @@ def detect_anormaly(features,
     return{
         'mse_normalized': float(normalized_mse[0]),
         'confidence': float(confidence[0]),
-        'threshold': threshold,
+        'threshold': float(threshold),
         'severity': severity
     }
 
 
-def classify_attack(features, 
-                   model_path=Path('trained_models/best_baseline.pkl'), 
-                   scaler_path=Path('trained_models/scaler_standard.pkl'), 
+def classify_attack(features,
+                   model_path=Path('trained_models/best_baseline.pkl'),
+                   scaler_path=Path('trained_models/scaler_standard.pkl'),
                    encoder_path=Path('trained_models/encoder.pkl')):
     
     '''Classify attack type using trained classifier'''
@@ -74,18 +76,21 @@ def classify_attack(features,
         X_df = pd.DataFrame(X)
 
     X_scaled = scaler.transform(X_df)
-    
+
+    # Convert back to DataFrame for prediction to match training
+    X_scaled_df = pd.DataFrame(X_scaled, columns=scaler.feature_names_in_)
+
     # Make predictions
-    model_pred = model.predict(X_scaled)
+    model_pred = model.predict(X_scaled_df)
     
     
     # Determine class indices
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X_scaled)
+        proba = model.predict_proba(X_scaled_df)
         class_index = np.argmax(proba, axis=1)
     elif isinstance(model_pred, np.ndarray) and model_pred.ndim > 1 and model_pred.shape[1] > 1:
         class_index = np.argmax(model_pred, axis=1)
-    else:  
+    else:
         class_index = (model_pred > 0.5).astype(int).ravel()
 
     # Decode class Label
@@ -113,16 +118,3 @@ def predict_threat(features):
         'severity': severity,
         'anomaly': anomaly_info
     }
-
-# quick usage example (single sample)
-if __name__ == "__main__":
-    final_input = np.array([[80.0, 1293792.0, 3.0, 7.0, 26.0, 11607.0, 20.0, 0.0, 8.666666667, 10.26320288,
-        5840.0, 0.0, 1658.142857, 2137.29708, 8991.398927, 7.72921768, 143754.6667, 430865.8067,
-        1292730.0, 2.0, 747.0, 373.5, 523.9661249, 744.0, 3.0, 1293746.0, 215624.3333, 527671.9348,
-        1292730.0, 2.0, 0.0, 0.0, 0.0, 0.0, 72.0, 152.0, 2.318765304, 5.410452376, 0.0, 5840.0,
-        1057.545455, 1853.437529, 3435230.673, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 2.0,
-        1163.3, 8.666666667, 1658.142857, 72.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 26.0, 7.0,
-        11607.0, 8192.0, 229.0, 2.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
-    
-    result = predict_threat(final_input)
-    print(result)

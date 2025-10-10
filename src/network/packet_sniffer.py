@@ -1,5 +1,13 @@
-from scapy.all import sniff, Ether, IP, IPv6, TCP, UDP, ICMP
+from scapy.all import sniff, Ether, IP, IPv6, TCP, UDP, ICMP, conf
 from src.network.traffic_analyzer import analyse_packet
+
+def get_active_interface():
+    """Automatically detect the active network interface with an IP address."""
+    for i in conf.ifaces.data.keys():
+        iface = conf.ifaces[i]
+        if iface.ip and iface.ip not in ('127.0.0.1', '0.0.0.0'):
+            return i
+    return '\\Device\\NPF_Loopback'  # Fallback to loopback
 
 SHOW_PAYLOADS = False
 

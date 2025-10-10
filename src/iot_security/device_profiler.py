@@ -11,9 +11,9 @@ class DeviceProfiler:
             })
         
     def profile_device(self, device_id, packet_size):
-        profile =self.profiles[device_id]
+        profile = self.profiles[device_id]
         profile['packet_count'] += 1
-        profile['byte_count'] += 1
+        profile['byte_count'] += packet_size
         current_time = time.time()
         if not profile['start_time']:
             profile['start_time'] = current_time
@@ -21,6 +21,6 @@ class DeviceProfiler:
 
         # check for anomalies (e.g unusual traffic volume)
         duration = profile['last_time'] - profile['start_time']
-        if duration > 0 and profile['byte_count'] / 100:
-            return 'Suspicious activity detected' 
+        if duration > 0 and profile['packet_count'] / duration > 100:  # more than 100 packets/sec
+            return 'Suspicious activity detected'
         return 'Normal'

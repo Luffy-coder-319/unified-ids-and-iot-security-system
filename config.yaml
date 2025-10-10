@@ -1,0 +1,49 @@
+app:
+  host: "0.0.0.0"
+  port: 8000
+
+network:
+  interface: "lo"  # Use loopback to capture localhost traffic (use "eth0" for external traffic)
+
+ml:
+  model_path: "trained_models/best_baseline.pkl"
+  scaler_path: "trained_models/scaler_standard.pkl"
+  encoder_path: "trained_models/encoder.pkl"
+  anomaly_model_path: "trained_models/dl_models/anomaly_autoencoder.keras"
+  anomaly_scaler_path: "trained_models/dl_models/anormaly_scaler.joblib"
+  anomaly_threshold_path: "trained_models/dl_models/anomaly_threshold.npy"
+
+logging:
+  level: "INFO"
+  file: "logs/app.log"
+
+security:
+  high_severity_threshold: 0.8
+  block_suspicious: true
+
+# Notification service configuration
+notifications:
+  email:
+    enabled: false  # Set to true to enable email notifications
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender_email: "your-email@gmail.com"
+    password: ""  # Use EMAIL_PASSWORD environment variable for security
+    recipients:
+      - "security-team@example.com"
+      - "admin@example.com"
+  sms:
+    enabled: false  # Set to true to enable SMS notifications
+    account_sid: ""  # Use TWILIO_ACCOUNT_SID environment variable
+    auth_token: ""   # Use TWILIO_AUTH_TOKEN environment variable
+    from_number: "+1234567890"
+    recipients:
+      - "+1234567890"
+
+# Automated response configuration
+response_actions:
+  enabled: true
+  auto_block_high_severity: true
+  auto_block_medium_severity: false
+  rate_limit_threshold: 100  # packets per second
+  temp_block_duration: 3600  # seconds (1 hour)

@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+TODO.md
+ENHANCEMENTS.md
+IMPLEMENTATION_SUMMARY.md
+VERIFICATION.md
+PROJECT_STRUCTURE.md
+
+# Data and training
+data/
+notebooks/
+
+# Logs
+logs/*.json
+logs/*.jsonl
+logs/*.log
+
+# Virtual environment
+venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.Python
+
+# Node modules
+node_modules/
+src/frontend/node_modules/
+src/frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.py
+*_test.py
+inject_*.py
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~

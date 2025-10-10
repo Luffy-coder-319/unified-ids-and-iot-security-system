@@ -84,7 +84,7 @@ def engineer_features_from_flow(packets):
         if 'IP' not in pkt:
             continue
         if TCP in pkt:
-            hlen = pkt[TCP].dataofs * 4
+            hlen = (pkt[TCP].dataofs or 5) * 4  # Default to 5 (20 bytes) if None
         elif UDP in pkt:
             hlen = 8
         else:  # ICMP or other

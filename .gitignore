@@ -1,7 +1,7 @@
 # Virtual environment
 venv/
 .env
-
+myvenv/
 # Data and models
 data/
 trained_models/
@@ -17,3 +17,37 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# Logs
+logs/*.json
+logs/*.jsonl
+logs/*.log
+!logs/.gitkeep
+
+# Node modules (frontend)
+src/frontend/node_modules/
+src/frontend/dist/
+src/frontend/.vite/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Testing
+test_*.py
+*_test.py
+inject_*.py
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Windows
+*.exe
+*.dll
+*.winmd
