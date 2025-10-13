@@ -41,7 +41,7 @@ function App() {
           <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">🖥 Devices</li>
           <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">⚠️ Threat Logs</li>
           <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">📑 Reports</li>
-          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">⚙ Settings</li>
+
         </ul>
       </aside>
 
