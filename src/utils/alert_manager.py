@@ -144,6 +144,7 @@ class AlertManager:
         valid_statuses = ['new', 'investigating', 'resolved', 'false_positive']
         if status not in valid_statuses:
             return False
+        
 
         with self.lock:
             for alert in self.alerts:

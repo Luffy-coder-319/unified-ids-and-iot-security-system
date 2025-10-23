@@ -3,16 +3,64 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 
 function Flows() {
   const [flows, setFlows] = useState([]);
+  const [useWebSocket, setUseWebSocket] = useState(true);
+  const [error, setError] = useState(null);
 
-  // WebSocket connection for real-time flows
+  // Try WebSocket connection first, fallback to REST API
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/flows');
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setFlows(data);
-    };
-    return () => ws.close();
-  }, []);
+    if (useWebSocket) {
+      try {
+        const ws = new WebSocket('ws://localhost:8000/ws/flows');
+
+        ws.onopen = () => {
+          console.log('WebSocket connected for flows');
+          setError(null);
+        };
+
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          setFlows(data);
+        };
+
+        ws.onerror = (err) => {
+          console.error('WebSocket error, falling back to REST API:', err);
+          setUseWebSocket(false);
+          setError('WebSocket failed, using REST API');
+        };
+
+        ws.onclose = () => {
+          console.log('WebSocket closed, falling back to REST API');
+          setUseWebSocket(false);
+        };
+
+        return () => ws.close();
+      } catch (err) {
+        console.error('WebSocket initialization failed:', err);
+        setUseWebSocket(false);
+      }
+    } else {
+      // Fallback to REST API polling
+      const fetchFlows = async () => {
+        try {
+          const response = await fetch('http://localhost:8000/api/flows');
+          if (response.ok) {
+            const data = await response.json();
+            setFlows(data);
+            setError(null);
+          } else {
+            setError('Failed to fetch flows');
+          }
+        } catch (err) {
+          console.error('Error fetching flows:', err);
+          setError('Cannot connect to API');
+        }
+      };
+
+      fetchFlows();
+      const interval = setInterval(fetchFlows, 2000); // Poll every 2 seconds
+      return () => clearInterval(interval);
+    }
+  }, [useWebSocket]);
 
   // Prepare data for chart
   const chartData = flows.map((flow, index) => ({
@@ -23,9 +71,18 @@ function Flows() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold text-green-400">Network Flows</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-green-400">Network Flows</h2>
+        <div className="text-sm text-gray-400">
+          {useWebSocket ? '🟢 Live' : '🔄 Polling'}
+          {error && <span className="ml-2 text-yellow-400">({error})</span>}
+        </div>
+      </div>
       {flows.length === 0 ? (
-        <p className="text-gray-400">No flows yet</p>
+        <div className="text-center py-8">
+          <p className="text-gray-400 mb-2">No network flows detected yet</p>
+          <p className="text-gray-500 text-sm">Start browsing or generate network activity to see flows</p>
+        </div>
       ) : (
         <>
           <ResponsiveContainer width="100%" height={400}>

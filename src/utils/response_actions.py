@@ -1,10 +1,15 @@
 import subprocess
 import logging
 import time
+import platform
 from collections import defaultdict
 from threading import Lock
 
 logger = logging.getLogger(__name__)
+
+# Detect platform for firewall commands
+IS_WINDOWS = platform.system() == 'Windows'
+IS_LINUX = platform.system() == 'Linux'
 
 class ResponseActionManager:
     """
@@ -55,7 +60,7 @@ class ResponseActionManager:
 
     def block_ip(self, ip_address, reason='threat_detected', permanent=False):
         """
-        Block an IP address using iptables.
+        Block an IP address using platform-specific firewall (iptables on Linux, Windows Firewall on Windows).
 
         Args:
             ip_address: IP address to block
@@ -76,13 +81,29 @@ class ResponseActionManager:
                 return True
 
             try:
-                # Add iptables rule to block IP
-                result = subprocess.run(
-                    ['sudo', 'iptables', '-A', 'INPUT', '-s', ip_address, '-j', 'DROP'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
+                if IS_WINDOWS:
+                    # Windows Firewall command
+                    rule_name = f"IDS_Block_{ip_address.replace('.', '_')}"
+                    result = subprocess.run(
+                        ['netsh', 'advfirewall', 'firewall', 'add', 'rule',
+                         f'name={rule_name}', 'dir=in', 'action=block',
+                         f'remoteip={ip_address}'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                elif IS_LINUX:
+                    # Linux iptables command
+                    result = subprocess.run(
+                        ['sudo', 'iptables', '-A', 'INPUT', '-s', ip_address, '-j', 'DROP'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                else:
+                    logger.warning(f"Platform {platform.system()} not supported for IP blocking")
+                    self._log_action('block_ip', ip_address, reason, False)
+                    return False
 
                 if result.returncode == 0:
                     self.blocked_ips[ip_address] = {
@@ -109,7 +130,7 @@ class ResponseActionManager:
 
     def unblock_ip(self, ip_address):
         """
-        Unblock an IP address.
+        Unblock an IP address using platform-specific firewall.
 
         Args:
             ip_address: IP address to unblock
@@ -127,13 +148,27 @@ class ResponseActionManager:
                 return False
 
             try:
-                # Remove iptables rule
-                result = subprocess.run(
-                    ['sudo', 'iptables', '-D', 'INPUT', '-s', ip_address, '-j', 'DROP'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
+                if IS_WINDOWS:
+                    # Windows Firewall command
+                    rule_name = f"IDS_Block_{ip_address.replace('.', '_')}"
+                    result = subprocess.run(
+                        ['netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+                         f'name={rule_name}'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                elif IS_LINUX:
+                    # Linux iptables command
+                    result = subprocess.run(
+                        ['sudo', 'iptables', '-D', 'INPUT', '-s', ip_address, '-j', 'DROP'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                else:
+                    logger.warning(f"Platform {platform.system()} not supported for IP unblocking")
+                    return False
 
                 if result.returncode == 0:
                     del self.blocked_ips[ip_address]
@@ -152,7 +187,8 @@ class ResponseActionManager:
 
     def rate_limit_ip(self, ip_address, rate):
         """
-        Apply rate limiting to an IP address using iptables.
+        Apply rate limiting to an IP address (Linux only - iptables with limit module).
+        On Windows, this falls back to blocking the IP.
 
         Args:
             ip_address: IP address to rate limit
@@ -166,27 +202,36 @@ class ResponseActionManager:
             return False
 
         try:
-            # Add rate limiting rule
-            result = subprocess.run([
-                'sudo', 'iptables', '-A', 'INPUT',
-                '-s', ip_address,
-                '-m', 'limit', '--limit', rate,
-                '-j', 'ACCEPT'
-            ], capture_output=True, text=True, timeout=10)
+            if IS_LINUX:
+                # Add rate limiting rule
+                result = subprocess.run([
+                    'sudo', 'iptables', '-A', 'INPUT',
+                    '-s', ip_address,
+                    '-m', 'limit', '--limit', rate,
+                    '-j', 'ACCEPT'
+                ], capture_output=True, text=True, timeout=10)
 
-            # Drop packets exceeding rate
-            subprocess.run([
-                'sudo', 'iptables', '-A', 'INPUT',
-                '-s', ip_address,
-                '-j', 'DROP'
-            ], capture_output=True, text=True, timeout=10)
+                # Drop packets exceeding rate
+                subprocess.run([
+                    'sudo', 'iptables', '-A', 'INPUT',
+                    '-s', ip_address,
+                    '-j', 'DROP'
+                ], capture_output=True, text=True, timeout=10)
 
-            if result.returncode == 0:
-                self._log_action('rate_limit', ip_address, f'rate={rate}', True)
-                logger.info(f"Applied rate limit to IP: {ip_address} ({rate})")
-                return True
+                if result.returncode == 0:
+                    self._log_action('rate_limit', ip_address, f'rate={rate}', True)
+                    logger.info(f"Applied rate limit to IP: {ip_address} ({rate})")
+                    return True
+                else:
+                    logger.error(f"Failed to rate-limit IP {ip_address}: {result.stderr}")
+                    self._log_action('rate_limit', ip_address, f'rate={rate}', False)
+                    return False
+            elif IS_WINDOWS:
+                # Windows doesn't support rate limiting easily, fall back to temporary block
+                logger.warning(f"Rate limiting not supported on Windows, blocking IP {ip_address} instead")
+                return self.block_ip(ip_address, f'rate_limit_fallback_{rate}', permanent=False)
             else:
-                logger.error(f"Failed to rate-limit IP {ip_address}: {result.stderr}")
+                logger.warning(f"Platform {platform.system()} not supported for rate limiting")
                 self._log_action('rate_limit', ip_address, f'rate={rate}', False)
                 return False
 
@@ -296,7 +341,7 @@ class ResponseActionManager:
 
     def whitelist_ip(self, ip_address):
         """
-        Add an IP to whitelist (prevent future blocking).
+        Add an IP to whitelist (prevent future blocking) using platform-specific firewall.
 
         Args:
             ip_address: IP to whitelist
@@ -305,12 +350,24 @@ class ResponseActionManager:
             Boolean indicating success
         """
         try:
-            # Add iptables rule to accept from this IP (high priority)
-            result = subprocess.run([
-                'sudo', 'iptables', '-I', 'INPUT', '1',
-                '-s', ip_address,
-                '-j', 'ACCEPT'
-            ], capture_output=True, text=True, timeout=10)
+            if IS_WINDOWS:
+                # Windows Firewall - create allow rule
+                rule_name = f"IDS_Whitelist_{ip_address.replace('.', '_')}"
+                result = subprocess.run([
+                    'netsh', 'advfirewall', 'firewall', 'add', 'rule',
+                    f'name={rule_name}', 'dir=in', 'action=allow',
+                    f'remoteip={ip_address}', 'enable=yes'
+                ], capture_output=True, text=True, timeout=10)
+            elif IS_LINUX:
+                # Linux iptables - add high priority accept rule
+                result = subprocess.run([
+                    'sudo', 'iptables', '-I', 'INPUT', '1',
+                    '-s', ip_address,
+                    '-j', 'ACCEPT'
+                ], capture_output=True, text=True, timeout=10)
+            else:
+                logger.warning(f"Platform {platform.system()} not supported for whitelisting")
+                return False
 
             if result.returncode == 0:
                 self._log_action('whitelist', ip_address, 'manual_whitelist', True)

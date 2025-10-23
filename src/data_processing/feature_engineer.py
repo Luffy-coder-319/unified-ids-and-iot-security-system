@@ -1,254 +1,323 @@
+"""
+Feature Engineering Module for Network IDS
+Supports CICIoT2023 dataset format (46 features).
+Optimized for IoT device traffic detection and real-time analysis.
+CICIoT2023 Features:
+- Flow duration and rates
+- Protocol flags and types
+- Statistical measures (min, max, avg, std)
+- Inter-arrival times
+- Protocol indicators (HTTP, HTTPS, DNS, SSH, etc.)
+- Advanced metrics (Magnitude, Radius, Covariance, Weight)
+"""
+
 import numpy as np
 import pandas as pd
-from scapy.all import TCP, UDP, IP
+from scapy.all import TCP, UDP, IP, ICMP, ARP
+from typing import List, Dict, Optional
+import json
+from pathlib import Path
+
+# --- Load the exact feature list required by the models ---
+# NOTE: We use CICIoT2023 features (46) for the system
+try:
+    FEATURE_INFO_PATH = Path('trained_models/retrained/feature_info.json')
+    with open(FEATURE_INFO_PATH, 'r') as f:
+        _feature_info = json.load(f)
+    REQUIRED_FEATURES = _feature_info.get("feature_names", [])
+    if not REQUIRED_FEATURES:
+        raise ValueError("Feature list is empty in feature_info.json")
+except Exception as e:
+    # Fallback to CICIoT2023 feature list since that's what the system uses
+    print(f"CRITICAL: Failed to load feature list from {FEATURE_INFO_PATH}: {e}")
+    REQUIRED_FEATURES = [
+        'flow_duration', 'Header_Length', 'Protocol Type', 'Duration', 'Rate', 'Drate',
+        'fin_flag_number', 'syn_flag_number', 'psh_flag_number', 'ack_flag_number',
+        'ece_flag_number', 'cwr_flag_number', 'syn_count', 'fin_count', 'urg_count',
+        'rst_count', 'HTTP', 'HTTPS', 'DNS', 'Telnet', 'SMTP', 'SSH', 'IRC', 'TCP',
+        'UDP', 'DHCP', 'ARP', 'ICMP', 'IPv', 'Tot sum', 'Min', 'Max', 'AVG',
+        'Tot size', 'IAT', 'Covariance', 'Variance'
+    ]
 
 def engineer_features_from_flow(packets):
     """
-    Extract CICIDS-style flow features from a list of Scapy packets.
-    Approximates CICIDS2017 features for live IDS analysis.
+    Extract the exact features required by the ML models from a list of Scapy packets.
+
+    Args:
+        packets: List of Scapy packet objects
+
+    Returns:
+        pd.DataFrame: Single-row DataFrame with the required model features.
     """
     if not packets:
         return pd.DataFrame()
 
-    # --- Basic direction detection ---
+    # --- Basic packet analysis ---
     first_pkt = packets[0]
-    src_ip = first_pkt[IP].src if 'IP' in first_pkt else None
-    dst_ip = first_pkt[IP].dst if 'IP' in first_pkt else None
-    protocol = first_pkt[IP].proto if 'IP' in first_pkt else 0
-    dst_port = (
-        first_pkt[TCP].dport if TCP in first_pkt else
-        first_pkt[UDP].dport if UDP in first_pkt else 0
-    )
+    src_ip = first_pkt[IP].src if IP in first_pkt else None
+    dst_ip = first_pkt[IP].dst if IP in first_pkt else None
 
-    # --- Timing and packet metrics ---
+    # Protocol detection
+    protocol = first_pkt[IP].proto if IP in first_pkt else 0
+
+    # --- Timing and basic metrics ---
     times = np.array([pkt.time for pkt in packets])
     sizes = np.array([len(pkt) for pkt in packets])
-    duration = times[-1] - times[0] if len(times) > 1 else 0.0
+
+    flow_duration = times[-1] - times[0] if len(times) > 1 else 0.0
     total_packets = len(packets)
     total_bytes = sizes.sum()
 
-    # --- Direction-based split (approximation) ---
-    fwd_sizes = []
-    bwd_sizes = []
-    fwd_times = []
-    bwd_times = []
+    # --- Header length calculation ---
+    header_lengths = []
     for pkt in packets:
-        if 'IP' not in pkt:
-            continue
-        if pkt[IP].src == src_ip:
-            fwd_sizes.append(len(pkt))
-            fwd_times.append(pkt.time)
+        if IP in pkt:
+            ip_hdr = pkt[IP].ihl * 4 if pkt[IP].ihl else 20
+            if TCP in pkt:
+                tcp_hdr = (pkt[TCP].dataofs or 5) * 4
+                header_lengths.append(ip_hdr + tcp_hdr)
+            elif UDP in pkt:
+                header_lengths.append(ip_hdr + 8)
+            else:
+                header_lengths.append(ip_hdr)
         else:
-            bwd_sizes.append(len(pkt))
-            bwd_times.append(pkt.time)
-    fwd_sizes = np.array(fwd_sizes) if fwd_sizes else np.array([0])
-    bwd_sizes = np.array(bwd_sizes) if bwd_sizes else np.array([0])
-    fwd_times = np.array(fwd_times) if fwd_times else np.array([])
-    bwd_times = np.array(bwd_times) if bwd_times else np.array([])
+            header_lengths.append(0)
 
-    # --- Inter-arrival times ---
-    iats = np.diff(times) if len(times) > 1 else np.array([0])
-    fwd_iats = np.diff(fwd_times) if len(fwd_times) > 1 else np.array([0])
-    bwd_iats = np.diff(bwd_times) if len(bwd_times) > 1 else np.array([0])
+    header_length = np.mean(header_lengths) if header_lengths else 0
 
-    fwd_iat_total = fwd_times[-1] - fwd_times[0] if len(fwd_times) > 1 else 0.0
-    bwd_iat_total = bwd_times[-1] - bwd_times[0] if len(bwd_times) > 1 else 0.0
+    # --- Protocol type (numeric encoding) ---
+    # TCP=6, UDP=17, ICMP=1, etc.
+    protocol_type = protocol
 
-    # --- Flag counts (split for PSH and URG, overall for others) ---
-    fin = syn = rst = psh = ack = urg = cwe = ece = 0
-    fwd_psh = bwd_psh = fwd_urg = bwd_urg = 0
+    # --- Duration (same as flow_duration) ---
+    duration = flow_duration
+
+    # --- Rates ---
+    rate = total_packets / duration if duration > 0 else total_packets  # Total packet rate
+
+    # Split by direction
+    fwd_packets = []
+    bwd_packets = []
+    fwd_bytes = 0
+    bwd_bytes = 0
+
+    for pkt in packets:
+        if IP not in pkt:
+            continue
+        pkt_size = len(pkt)
+        if pkt[IP].src == src_ip:
+            fwd_packets.append(pkt)
+            fwd_bytes += pkt_size
+        else:
+            bwd_packets.append(pkt)
+            bwd_bytes += pkt_size
+
+    srate = len(fwd_packets) / duration if duration > 0 else 0.0  # Source rate
+    drate = len(bwd_packets) / duration if duration > 0 else 0.0  # Destination rate
+
+    # --- Flag counts ---
+    fin_flag_number = 0
+    syn_flag_number = 0
+    rst_flag_number = 0
+    psh_flag_number = 0
+    ack_flag_number = 0
+    ece_flag_number = 0
+    cwr_flag_number = 0
+    urg_count = 0
+
     for pkt in packets:
         if TCP in pkt:
             flags = pkt[TCP].flags
-            fin += int('F' in flags)
-            syn += int('S' in flags)
-            rst += int('R' in flags)
-            psh += int('P' in flags)
-            ack += int('A' in flags)
-            urg += int('U' in flags)
-            ece += int('E' in flags)
-            cwe += int('C' in flags)
+            fin_flag_number += int('F' in flags)
+            syn_flag_number += int('S' in flags)
+            rst_flag_number += int('R' in flags)
+            psh_flag_number += int('P' in flags)
+            ack_flag_number += int('A' in flags)
+            ece_flag_number += int('E' in flags)
+            cwr_flag_number += int('C' in flags)
+            urg_count += int('U' in flags)
+    ack_count = ack_flag_number
+    syn_count = syn_flag_number
+    fin_count = fin_flag_number
+    rst_count = rst_flag_number
+    has_http = 0
+    has_https = 0
+    has_dns = 0
+    has_telnet = 0
+    has_smtp = 0
+    has_ssh = 0
+    has_irc = 0
+    has_tcp = 0
+    has_udp = 0
+    has_dhcp = 0
+    has_arp = 0
+    has_icmp = 0
+    has_ipv = 0
+    has_llc = 0
 
-            if pkt[IP].src == src_ip:
-                fwd_psh += int('P' in flags)
-                fwd_urg += int('U' in flags)
-            else:
-                bwd_psh += int('P' in flags)
-                bwd_urg += int('U' in flags)
-
-    # --- Header lengths ---
-    fwd_header_len = 0
-    bwd_header_len = 0
-    fwd_seg_sizes = []
     for pkt in packets:
-        if 'IP' not in pkt:
-            continue
         if TCP in pkt:
-            hlen = (pkt[TCP].dataofs or 5) * 4  # Default to 5 (20 bytes) if None
+            has_tcp = 1
+            sport = pkt[TCP].sport
+            dport = pkt[TCP].dport
+            if sport == 80 or dport == 80:
+                has_http = 1
+            if sport == 443 or dport == 443:
+                has_https = 1
+            if sport == 23 or dport == 23:
+                has_telnet = 1
+            if sport == 25 or dport == 25:
+                has_smtp = 1
+            if sport == 22 or dport == 22:
+                has_ssh = 1
+            if sport in [6667, 6668, 6669] or dport in [6667, 6668, 6669]:
+                has_irc = 1
         elif UDP in pkt:
-            hlen = 8
-        else:  # ICMP or other
-            hlen = 8  # approximation
-        if pkt[IP].src == src_ip:
-            fwd_header_len += hlen
-            fwd_seg_sizes.append(hlen)
+            has_udp = 1
+            sport = pkt[UDP].sport
+            dport = pkt[UDP].dport
+            if sport == 53 or dport == 53:
+                has_dns = 1
+            if sport == 67 or dport == 68 or sport == 68 or dport == 67:
+                has_dhcp = 1
+        elif ICMP in pkt:
+            has_icmp = 1
+        elif ARP in pkt:
+            has_arp = 1
+
+        if IP in pkt:
+            has_ipv = 1
+
+    # --- Statistical features ---
+    tot_sum = total_bytes
+    min_size = np.min(sizes) if len(sizes) > 0 else 0
+    max_size = np.max(sizes) if len(sizes) > 0 else 0
+    avg_size = np.mean(sizes) if len(sizes) > 0 else 0
+    std_size = np.std(sizes) if len(sizes) > 0 else 0
+    tot_size = total_bytes
+    # --- Inter-arrival time (IAT) ---
+    if len(times) > 1:
+        iats = np.diff(times)
+        iat = np.mean(iats)
+    else:
+        iat = 0.0
+
+    # --- Number of packets ---
+    number = total_packets
+    # --- Advanced features ---
+   
+    magnitude = np.sqrt(np.sum(sizes ** 2)) if len(sizes) > 0 else 0
+
+    # Radius: Mean distance from centroid
+    if len(sizes) > 1:
+        centroid = np.mean(sizes)
+        radius = np.mean(np.abs(sizes - centroid))
+    else:
+        radius = 0
+
+    # Covariance: Between packet size and inter-arrival time
+    if len(times) > 1 and len(sizes) > 1:
+        iats_full = np.diff(times)
+        sizes_for_cov = sizes[:-1]  # Match length with IATs
+        if len(iats_full) == len(sizes_for_cov):
+            covariance = np.cov(sizes_for_cov, iats_full)[0, 1]
         else:
-            bwd_header_len += hlen
+            covariance = 0
+    else:
+        covariance = 0
 
-    min_seg_size_fwd = min(fwd_seg_sizes) if fwd_seg_sizes else 0
+    # Variance
+    variance = np.var(sizes) if len(sizes) > 0 else 0
 
-    # --- Init window sizes ---
-    init_win_fwd = -1
-    init_win_bwd = -1
-    fwd_tcp_pkts = [pkt for pkt in packets if TCP in pkt and pkt[IP].src == src_ip]
-    bwd_tcp_pkts = [pkt for pkt in packets if TCP in pkt and pkt[IP].src != src_ip]
-    if fwd_tcp_pkts:
-        fwd_tcp_pkts.sort(key=lambda p: p.time)
-        init_win_fwd = fwd_tcp_pkts[0][TCP].window
-    if bwd_tcp_pkts:
-        bwd_tcp_pkts.sort(key=lambda p: p.time)
-        init_win_bwd = bwd_tcp_pkts[0][TCP].window
+    # Weight: Ratio of payload to total size
+    payload_sum = 0
+    for pkt in packets:
+        if TCP in pkt and hasattr(pkt[TCP], 'payload'):
+            payload_sum += len(pkt[TCP].payload)
+        elif UDP in pkt and hasattr(pkt[UDP], 'payload'):
+            payload_sum += len(pkt[UDP].payload)
+    weight = payload_sum / total_bytes if total_bytes > 0 else 0
 
-    # --- Active data packets fwd ---
-    act_data_pkt_fwd = sum(1 for pkt in packets if 'IP' in pkt and pkt[IP].src == src_ip and TCP in pkt and len(pkt[TCP].payload) > 0)
-
-    # --- Active/Idle stats ---
-    all_times = sorted(times)
-    active_mean = active_std = active_max = active_min = 0.0
-    idle_mean = idle_std = idle_max = idle_min = 0.0
-    if len(all_times) >= 2:
-        iats = np.diff(all_times)
-        threshold = 1.0  # 1 second threshold for idle
-        active_durs = []
-        idle_durs = []
-        start = all_times[0]
-        for i in range(1, len(all_times)):
-            if iats[i-1] > threshold:
-                active_durs.append(all_times[i-1] - start)
-                idle_durs.append(iats[i-1])
-                start = all_times[i]
-        active_durs.append(all_times[-1] - start)
-        if active_durs:
-            active_mean = np.mean(active_durs)
-            active_std = np.std(active_durs)
-            active_max = np.max(active_durs)
-            active_min = np.min(active_durs)
-        if idle_durs:
-            idle_mean = np.mean(idle_durs)
-            idle_std = np.std(idle_durs)
-            idle_max = np.max(idle_durs)
-            idle_min = np.min(idle_durs)
-
-    # --- Derived rates ---
-    flow_bytes_s = total_bytes / duration if duration > 0 else total_bytes
-    flow_pkts_s = total_packets / duration if duration > 0 else total_packets
-    fwd_pkts_s = len(fwd_sizes) / duration if duration > 0 else len(fwd_sizes)
-    bwd_pkts_s = len(bwd_sizes) / duration if duration > 0 else len(bwd_sizes)
-
-    # --- Basic statistics ---
-    def safe_stats(arr):
-        if len(arr) == 0:
-            return {'max': 0, 'min': 0, 'mean': 0, 'std': 0, 'var': 0}
-        return {
-            'max': np.max(arr),
-            'min': np.min(arr),
-            'mean': np.mean(arr),
-            'std': np.std(arr),
-            'var': np.var(arr)
-        }
-
-    pkt_stats = safe_stats(sizes)
-    fwd_stats = safe_stats(fwd_sizes)
-    bwd_stats = safe_stats(bwd_sizes)
-    flow_iat_stats = safe_stats(iats)
-    fwd_iat_stats = safe_stats(fwd_iats)
-    bwd_iat_stats = safe_stats(bwd_iats)
-
-    # --- Down/Up Ratio ---
-    down_up_ratio = len(bwd_sizes) / len(fwd_sizes) if len(fwd_sizes) > 0 else 0
-
-    # --- Build final feature dict (full CICIDS2017) ---
-    data = {
-        'Destination Port': [dst_port],
-        'Flow Duration': [duration],
-        'Total Fwd Packets': [len(fwd_sizes)],
-        'Total Backward Packets': [len(bwd_sizes)],
-        'Total Length of Fwd Packets': [fwd_sizes.sum()],
-        'Total Length of Bwd Packets': [bwd_sizes.sum()],
-        'Fwd Packet Length Max': [fwd_stats['max']],
-        'Fwd Packet Length Min': [fwd_stats['min']],
-        'Fwd Packet Length Mean': [fwd_stats['mean']],
-        'Fwd Packet Length Std': [fwd_stats['std']],
-        'Bwd Packet Length Max': [bwd_stats['max']],
-        'Bwd Packet Length Min': [bwd_stats['min']],
-        'Bwd Packet Length Mean': [bwd_stats['mean']],
-        'Bwd Packet Length Std': [bwd_stats['std']],
-        'Flow Bytes/s': [flow_bytes_s],
-        'Flow Packets/s': [flow_pkts_s],
-        'Flow IAT Mean': [flow_iat_stats['mean']],
-        'Flow IAT Std': [flow_iat_stats['std']],
-        'Flow IAT Max': [flow_iat_stats['max']],
-        'Flow IAT Min': [flow_iat_stats['min']],
-        'Fwd IAT Total': [fwd_iat_total],
-        'Fwd IAT Mean': [fwd_iat_stats['mean']],
-        'Fwd IAT Std': [fwd_iat_stats['std']],
-        'Fwd IAT Max': [fwd_iat_stats['max']],
-        'Fwd IAT Min': [fwd_iat_stats['min']],
-        'Bwd IAT Total': [bwd_iat_total],
-        'Bwd IAT Mean': [bwd_iat_stats['mean']],
-        'Bwd IAT Std': [bwd_iat_stats['std']],
-        'Bwd IAT Max': [bwd_iat_stats['max']],
-        'Bwd IAT Min': [bwd_iat_stats['min']],
-        'Fwd PSH Flags': [fwd_psh],
-        'Bwd PSH Flags': [bwd_psh],
-        'Fwd URG Flags': [fwd_urg],
-        'Bwd URG Flags': [bwd_urg],
-        'Fwd Header Length': [fwd_header_len],
-        'Bwd Header Length': [bwd_header_len],
-        'Fwd Packets/s': [fwd_pkts_s],
-        'Bwd Packets/s': [bwd_pkts_s],
-        'Min Packet Length': [pkt_stats['min']],
-        'Max Packet Length': [pkt_stats['max']],
-        'Packet Length Mean': [pkt_stats['mean']],
-        'Packet Length Std': [pkt_stats['std']],
-        'Packet Length Variance': [pkt_stats['var']],
-        'FIN Flag Count': [fin],
-        'SYN Flag Count': [syn],
-        'RST Flag Count': [rst],
-        'PSH Flag Count': [psh],
-        'ACK Flag Count': [ack],
-        'URG Flag Count': [urg],
-        'CWE Flag Count': [cwe],
-        'ECE Flag Count': [ece],
-        'Down/Up Ratio': [down_up_ratio],
-        'Average Packet Size': [total_bytes / total_packets if total_packets > 0 else 0],
-        'Avg Fwd Segment Size': [fwd_stats['mean']],
-        'Avg Bwd Segment Size': [bwd_stats['mean']],
-        'Fwd Header Length.1': [fwd_header_len],  # Duplicate in dataset
-        'Fwd Avg Bytes/Bulk': [0],
-        'Fwd Avg Packets/Bulk': [0],
-        'Fwd Avg Bulk Rate': [0],
-        'Bwd Avg Bytes/Bulk': [0],
-        'Bwd Avg Packets/Bulk': [0],
-        'Bwd Avg Bulk Rate': [0],
-        'Subflow Fwd Packets': [len(fwd_sizes)],
-        'Subflow Fwd Bytes': [fwd_sizes.sum()],
-        'Subflow Bwd Packets': [len(bwd_sizes)],
-        'Subflow Bwd Bytes': [bwd_sizes.sum()],
-        'Init_Win_bytes_forward': [init_win_fwd],
-        'Init_Win_bytes_backward': [init_win_bwd],
-        'act_data_pkt_fwd': [act_data_pkt_fwd],
-        'min_seg_size_forward': [min_seg_size_fwd],
-        'Active Mean': [active_mean],
-        'Active Std': [active_std],
-        'Active Max': [active_max],
-        'Active Min': [active_min],
-        'Idle Mean': [idle_mean],
-        'Idle Std': [idle_std],
-        'Idle Max': [idle_max],
-        'Idle Min': [idle_min],
+    # --- Build feature dictionary in exact required order ---
+    features = {
+        'flow_duration': flow_duration, 'Header_Length': header_length,
+        'Protocol Type': protocol_type, 'Duration': duration,
+        'Rate': rate, 'Drate': drate,
+        'fin_flag_number': fin_flag_number, 'syn_flag_number': syn_flag_number,
+        'psh_flag_number': psh_flag_number, 'ack_flag_number': ack_flag_number,
+        'ece_flag_number': ece_flag_number,'cwr_flag_number': cwr_flag_number,
+        'syn_count': syn_count, 'fin_count': fin_count,
+        'urg_count': urg_count, 'rst_count': rst_count,
+        'HTTP': has_http, 'HTTPS': has_https,
+        'DNS': has_dns, 'Telnet': has_telnet,
+        'SMTP': has_smtp, 'SSH': has_ssh,
+        'IRC': has_irc, 'TCP': has_tcp,
+        'UDP': has_udp,
+        'DHCP': has_dhcp,
+        'ARP': has_arp,
+        'ICMP': has_icmp,
+        'IPv': has_ipv,
+        'Tot sum': tot_sum,
+        'Min': min_size,
+        'Max': max_size,
+        'AVG': avg_size,
+        'Tot size': tot_size,
+        'IAT': iat,
+        'Covariance': covariance,
+        'Variance': variance
     }
 
-    # Fill any missing features with 0 so it matches model expectations
-    df = pd.DataFrame(data).fillna(0.0)
+    # The system now uses CICIoT2023 features (46) since that's the dataset the models were trained on
+    model_features = features
+
+    df = pd.DataFrame([model_features])
+    # Replace NaN and inf values with 0.0
+    df = df.replace([np.inf, -np.inf], 0.0)
+    df = df.fillna(0.0)
+
+    # Add debug logging to check for feature mismatches
+    expected_features = REQUIRED_FEATURES
+    actual_features = list(df.columns)
+    if len(actual_features) != len(expected_features):
+        print(f"[DEBUG] Feature count mismatch: expected {len(expected_features)}, got {len(actual_features)}")
+        print(f"[DEBUG] Expected: {expected_features}")
+        print(f"[DEBUG] Actual: {actual_features}")
+        missing = set(expected_features) - set(actual_features)
+        extra = set(actual_features) - set(expected_features)
+        if missing:
+            print(f"[DEBUG] Missing features: {missing}")
+        if extra:
+            print(f"[DEBUG] Extra features: {extra}")
+
     return df
+
+
+def get_feature_names():
+    """
+    Get the list of feature names required by the retrained models.
+    Returns: List[str]: List of required feature names.
+    """
+    return REQUIRED_FEATURES
+
+def validate_features(features_df):
+    """
+    Validate that the features DataFrame has the correct structure for the model.
+    Args: features_df: DataFrame to validate.
+    Returns: bool: True if valid, otherwise raises a ValueError.
+    """
+    expected_features = get_feature_names()
+    n_expected = len(expected_features)
+    if features_df.shape[1] != n_expected:
+        raise ValueError(f"Expected {n_expected} features, but got {features_df.shape[1]}.")
+
+    missing_features = set(expected_features) - set(features_df.columns)
+    if missing_features:
+        raise ValueError(f"The following required features are missing: {missing_features}")
+
+    extra_features = set(features_df.columns) - set(expected_features)
+    if extra_features:
+        raise ValueError(f"The following extra features were found: {extra_features}")
+
+    if not all(features_df.columns == expected_features):
+        raise ValueError("The feature columns are not in the expected order.")
+    return True

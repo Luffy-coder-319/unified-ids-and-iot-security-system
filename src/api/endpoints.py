@@ -3,8 +3,12 @@ from typing import Optional
 from pydantic import BaseModel
 from src.network.traffic_analyzer import (
     alerts, flows, statistics_tracker, alert_manager,
-    response_manager, notification_service
+    response_manager, notification_service,
+    detection_mode, detection_config
 )
+from src.network.packet_sniffer import get_network_interfaces, get_active_interface
+from src.iot_security.device_detector import iot_detector
+import src.network.traffic_analyzer as traffic_analyzer
 
 router = APIRouter()
 
@@ -23,6 +27,9 @@ class BlockIPRequest(BaseModel):
     ip_address: str
     reason: str = "manual_block"
     permanent: bool = False
+
+class DetectionModeRequest(BaseModel):
+    mode: str  # 'threshold' or 'pure_ml'
 
 
 # Alert endpoints
@@ -88,6 +95,18 @@ def update_alert_status(alert_id: int, request: UpdateAlertStatusRequest):
 def get_unacknowledged_count():
     """Get count of unacknowledged alerts."""
     return {"unacknowledged_count": alert_manager.get_unacknowledged_count()}
+
+@router.post("/alerts/clear")
+def clear_alerts():
+    """Clear all alerts (for testing purposes)."""
+    try:
+        # Clear the alerts list
+        alerts.clear()
+        # Clear alert manager
+        alert_manager.alerts.clear()
+        return {"message": "All alerts cleared", "success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear alerts: {str(e)}")
 
 
 # Statistics endpoints
@@ -160,3 +179,129 @@ def get_action_history(limit: int = Query(100, description="Number of actions to
         return {"actions": []}
     return {"actions": response_manager.get_action_history(limit=limit)}
 
+
+# Network interface endpoints
+@router.get("/network/interfaces")
+def get_interfaces():
+    """Get information about all network interfaces."""
+    try:
+        interfaces = get_network_interfaces()
+        active_interface = get_active_interface()
+        return {
+            "interfaces": interfaces,
+            "active_interface": active_interface,
+            "total": len(interfaces)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get network interfaces: {str(e)}")
+
+@router.get("/network/status")
+def get_network_status():
+    """Get current network monitoring status."""
+    try:
+        interfaces = get_network_interfaces()
+        active_interface = get_active_interface()
+
+        # Filter out loopback to show only external interfaces
+        external_interfaces = [iface for iface in interfaces if not iface['is_loopback']]
+
+        return {
+            "monitoring_interface": active_interface,
+            "external_ips": [iface['ip'] for iface in external_interfaces],
+            "interface_count": len(interfaces),
+            "external_interface_count": len(external_interfaces),
+            "details": external_interfaces
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get network status: {str(e)}")
+
+
+
+# IoT Device Detection endpoints
+@router.get("/iot/devices")
+def get_iot_devices():
+    """Get all detected devices (IoT and non-IoT)."""
+    try:
+        all_devices = iot_detector.get_all_devices()
+
+        # Convert sets to lists for JSON serialization
+        for device in all_devices:
+            if 'ports_used' in device:
+                device['ports_used'] = list(device['ports_used'])
+            if 'protocols_seen' in device:
+                device['protocols_seen'] = list(device['protocols_seen'])
+            # Convert datetime to string
+            if 'first_seen' in device:
+                device['first_seen'] = device['first_seen'].isoformat()
+            if 'last_seen' in device:
+                device['last_seen'] = device['last_seen'].isoformat()
+
+        return {
+            "devices": all_devices,
+            "total": len(all_devices)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get devices: {str(e)}")
+
+@router.get("/iot/summary")
+def get_iot_summary():
+    """Get summary of IoT device detection."""
+    try:
+        summary = iot_detector.get_device_summary()
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get IoT summary: {str(e)}")
+
+@router.get("/iot/devices/{ip_address}")
+def get_device_details(ip_address: str):
+    """Get details of a specific device by IP address."""
+    try:
+        device = iot_detector.get_device_info(ip_address=ip_address)
+
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        # Convert sets to lists for JSON serialization
+        if 'ports_used' in device:
+            device['ports_used'] = list(device['ports_used'])
+        if 'protocols_seen' in device:
+            device['protocols_seen'] = list(device['protocols_seen'])
+        # Convert datetime to string
+        if 'first_seen' in device:
+            device['first_seen'] = device['first_seen'].isoformat()
+        if 'last_seen' in device:
+            device['last_seen'] = device['last_seen'].isoformat()
+
+        return device
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get device details: {str(e)}")
+
+
+# Detection Mode endpoints
+@router.get("/detection/mode")
+def get_detection_mode():
+    """Get current detection mode and configuration."""
+    return {
+        "mode": traffic_analyzer.detection_mode,
+        "config": traffic_analyzer.detection_config,
+        "available_modes": ["threshold", "pure_ml"],
+        "description": {
+            "threshold": "Multi-layer filtering with confidence thresholds (recommended for production)",
+            "pure_ml": "Pure ML detection without filtering (best for testing and validation)"
+        }
+    }
+
+@router.post("/detection/mode")
+def set_detection_mode(request: DetectionModeRequest):
+    """Set detection mode."""
+    if request.mode not in ["threshold", "pure_ml"]:
+        raise HTTPException(status_code=400, detail="Invalid mode. Must be 'threshold' or 'pure_ml'")
+
+    traffic_analyzer.detection_mode = request.mode
+    return {
+        "message": f"Detection mode set to '{request.mode}'",
+        "mode": traffic_analyzer.detection_mode,
+        "success": True
+    }

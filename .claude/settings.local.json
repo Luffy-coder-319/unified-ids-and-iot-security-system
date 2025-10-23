@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; sys.path.insert(0, ''.''); from src.models.predict import predict_threat, EXPECTED_FEATURES, MODEL_FEATURE_NAMES, DL_MODEL_PATH, RF_MODEL_PATH; print(f''✓ Modules imported successfully''); print(f''✓ Expected features: {EXPECTED_FEATURES}''); print(f''✓ RF Model path: {RF_MODEL_PATH}''); print(f''✓ DL Model path: {DL_MODEL_PATH}'')\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,123 +1,274 @@
-# Project Structure
+# Project Structure Guide
 
-## Root Directory
+## 📁 Clean Folder Structure
+
+After running the cleanup script, your project will have this structure:
+
 ```
 unified-ids-and-iot-security-system/
-├── src/                          # Source code
-│   ├── api/                      # FastAPI backend
-│   │   ├── main.py              # API entry point with CORS
-│   │   └── endpoints.py         # API route handlers
-│   ├── data_processing/         # Data processing modules
-│   │   ├── data_loader.py       # Load and process data
-│   │   ├── feature_engineer.py  # CICIDS feature engineering
-│   │   └── preprocessor.py      # Data preprocessing
-│   ├── frontend/                # React dashboard
-│   │   ├── src/
-│   │   │   ├── App.jsx          # Main app component
-│   │   │   ├── components/      # React components
-│   │   │   │   ├── Alerts.jsx   # Alert display
-│   │   │   │   └── Flows.jsx    # Network flows
-│   │   │   └── main.jsx         # Entry point
-│   │   ├── package.json         # Frontend dependencies
-│   │   └── vite.config.js       # Vite configuration
-│   ├── iot_security/            # IoT security modules
-│   │   ├── device_profiler.py   # Device profiling
-│   │   └── mqtt_security.py     # MQTT security
-│   ├── models/                  # ML models
-│   │   ├── model_utils.py       # Model utilities
-│   │   ├── predict.py           # Prediction logic
-│   │   └── train.py             # Training logic
-│   ├── network/                 # Network monitoring
-│   │   ├── packet_sniffer.py    # Packet capture
-│   │   └── traffic_analyzer.py  # Traffic analysis & ML
-│   └── utils/                   # Utility modules
-│       ├── alert_manager.py     # Alert management
-│       ├── config_loader.py     # Configuration
-│       ├── helpers.py           # Helper functions
-│       ├── notification_service.py  # Email/SMS alerts
-│       ├── response_actions.py  # Automated responses
-│       └── statistics_tracker.py    # Statistics tracking
 │
-├── notebooks/                   # Jupyter notebooks for ML development
-│   ├── 01_data_consolidation_and_label_engineering.ipynb
-│   ├── 02_advanced_preprocessing_and_feature_engineering.ipynb
-│   ├── 03_addressing_class_imbalance.ipynb
-│   ├── 04_baseline_model_and_evaluation.ipynb
-│   ├── 05_deep_learning_model_development.ipynb
-│   ├── 06_hyperparameter_tuning_and_optimization.ipynb
-│   └── 07_model_comparison_dashboard.ipynb
+├── 📄 README.md                      # Main documentation & overview
+├── ⚙️ config.yaml                    # System configuration
+├── 📋 requirements.txt                # Python dependencies
 │
-├── trained_models/              # Pre-trained ML models (gitignored)
-│   ├── best_baseline.pkl        # RandomForest classifier
-│   ├── encoder.pkl              # Label encoder
-│   ├── scaler_standard.pkl      # Feature scaler
-│   └── dl_models/               # Deep learning models
+├── 🚀 START_SYSTEM.bat               # Main system launcher
+├── 🚀 START_SYSTEM.ps1               # PowerShell main script
+├── ⚡ FULL_START.bat                 # Quick full system start
+├── ⚡ QUICK_START.bat                # Quick API-only start
+├── 🔧 SETUP_VENV.bat                 # Virtual environment setup
+├── 📡 START_LIVE_MONITORING.ps1      # Live network monitoring
+├── 🐍 start_live_monitoring.py       # Monitoring Python script
+│
+├── 📚 docs/                           # Essential documentation
+│   ├── WINDOWS_SETUP.md              # Windows installation guide
+│   ├── SYSTEM_STARTUP_GUIDE.md       # How to start the system
+│   ├── DASHBOARD_SETUP.md            # Dashboard setup & usage
+│   ├── COMPLETE_TESTING_GUIDE.md     # Testing procedures
+│   ├── FALSE_POSITIVES_GUIDE.md      # Tuning false positives
+│   ├── MODEL_TRAINING_GUIDE.md       # Training ML models
+│   └── WINDOWS_COMPATIBILITY.md      # Technical Windows details
+│
+├── 🔧 scripts/                        # Utility scripts
+│   ├── build_frontend.bat            # Build React dashboard
+│   ├── run_anomaly_test.bat          # Run attack simulations
+│   └── test_external_attacks.ps1     # External attack testing
+│
+├── 🛠️ utils/                          # Helper utilities
+│   ├── clear_alerts.py               # Clear alert database
+│   ├── fix_false_positives.py        # FP adjustment tool
+│   ├── scan_network.py               # Network scanner
+│   ├── show_iot_devices.py           # Show detected IoT devices
+│   └── toggle_localhost_filtering.py # Toggle localhost filter
+│
+├── 💻 src/                            # Source code
+│   ├── api/                          # FastAPI backend
+│   │   ├── main.py                   # API server
+│   │   └── endpoints.py              # API endpoints
+│   │
+│   ├── models/                       # ML model inference
+│   │   ├── predict.py                # Prediction engine
+│   │   ├── hybrid_detector.py        # Hybrid ML/DL model
+│   │   └── model_ensemble.py         # Ensemble methods
+│   │
+│   ├── network/                      # Network monitoring
+│   │   ├── packet_sniffer.py         # Packet capture
+│   │   └── traffic_analyzer.py       # Traffic analysis
+│   │
+│   ├── iot_security/                 # IoT device detection
+│   │   └── device_detector.py        # IoT device profiling
+│   │
+│   ├── utils/                        # Utilities
+│   │   ├── alert_manager.py          # Alert management
+│   │   ├── config_loader.py          # Configuration loader
+│   │   └── response_actions.py       # Automated responses
+│   │
+│   └── frontend/                     # React dashboard
+│       ├── src/                      # React source
+│       ├── public/                   # Static assets
+│       ├── dist/                     # Built dashboard
+│       └── package.json              # Node.js config
+│
+├── 🧪 tests/                          # Test files
+│   ├── generate_anomalies.py         # Attack generator
+│   └── test_*.py                     # Various tests
+│
+├── 📊 notebooks/                      # Jupyter notebooks
+│   ├── 01_*.ipynb                    # Data exploration
+│   ├── 02_*.ipynb                    # Feature engineering
+│   ├── 03_*.ipynb                    # Model training
+│   └── ...
+│
+├── 🤖 trained_models/                 # Trained ML/DL models
+│   ├── best_baseline.pkl             # ML model
+│   ├── scaler_standard.pkl           # Feature scaler
+│   ├── encoder.pkl                   # Label encoder
+│   └── dl_models/                    # Deep learning models
+│       ├── final_ffnn_residual.keras
 │       ├── anomaly_autoencoder.keras
-│       ├── anomaly_threshold.npy
-│       └── anormaly_scaler.joblib
+│       └── ...
 │
-├── logs/                        # Runtime logs (gitignored)
-│   ├── .gitkeep                 # Preserve directory
-│   ├── alerts.jsonl             # Alert logs
-│   ├── alert_tracking.json      # Alert tracking
-│   └── statistics.json          # Statistics
+├── 📝 logs/                           # Log files
+│   ├── alerts.jsonl                  # Alert logs
+│   ├── app.log                       # Application logs
+│   └── alert_tracking.json           # Alert metadata
 │
-├── data/                        # Training data (gitignored)
+├── ⚙️ config/                         # Additional config files
 │
-├── config.yaml                  # System configuration
-├── requirements.txt             # Python dependencies
-├── generate_anomalies.py        # Traffic generation tool
-├── Dockerfile                   # Docker container config
-├── .dockerignore               # Docker ignore rules
-├── .env.example                # Environment variables template
-├── .gitignore                  # Git ignore rules
-├── README.md                   # Project overview
-├── ENHANCEMENTS.md             # Feature documentation
-├── IMPLEMENTATION_SUMMARY.md   # Implementation details
-├── VERIFICATION.md             # Testing & verification
-└── TODO.md                     # Development tasks
+└── 🐍 myvenv/                         # Python virtual environment
+    ├── Scripts/                      # Python executable & tools
+    └── Lib/                          # Installed packages
 ```
 
-## Key Components
+## 🎯 Key Directories Explained
 
-### Backend (FastAPI)
-- **Entry**: `src/api/main.py`
-- **Endpoints**: `/api/alerts`, `/api/flows`, `/api/statistics/*`, `/api/response/*`
-- **WebSockets**: `/ws/alerts`, `/ws/flows`
+### Root Directory
+Contains **only essential startup scripts** and main documentation.
 
-### Frontend (React + Vite)
-- **Entry**: `src/frontend/src/main.jsx`
-- **Dashboard**: Real-time threat monitoring
-- **Components**: Alerts, Flows, Statistics
+**Quick Start Files:**
+- `START_SYSTEM.bat` - Main launcher with setup
+- `FULL_START.bat` - One-click full system
+- `QUICK_START.bat` - One-click API only
 
-### ML Pipeline
-- **Training**: Jupyter notebooks in `notebooks/`
-- **Models**: RandomForest + Autoencoder
-- **Prediction**: Real-time threat classification
+### docs/
+**Only 7 essential guides** - everything you need to use the system.
 
-### Network Monitoring
-- **Packet Capture**: Scapy-based sniffer (requires root)
-- **Analysis**: Flow-based feature engineering
-- **Detection**: Dual ML model approach
+**For Users:**
+- `WINDOWS_SETUP.md` - First-time installation
+- `SYSTEM_STARTUP_GUIDE.md` - How to start
+- `DASHBOARD_SETUP.md` - Dashboard usage
 
-## Running the System
+**For Tuning:**
+- `FALSE_POSITIVES_GUIDE.md` - Reduce false positives
+- `COMPLETE_TESTING_GUIDE.md` - Testing procedures
 
-### Development
-```bash
-# Backend (requires sudo for packet capture)
-sudo venv/bin/python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+**For Developers:**
+- `MODEL_TRAINING_GUIDE.md` - Retrain models
+- `WINDOWS_COMPATIBILITY.md` - Technical details
 
-# Frontend
-cd src/frontend
-npm run dev
+### scripts/
+**Build and test scripts** that aren't needed daily.
+
+Use when:
+- Building frontend: `scripts\build_frontend.bat`
+- Testing attacks: `scripts\run_anomaly_test.bat`
+- External testing: `scripts\test_external_attacks.ps1`
+
+### utils/
+**Helper utilities** for maintenance and troubleshooting.
+
+Use when:
+- Clear old alerts: `utils\clear_alerts.py`
+- Fix FP issues: `utils\fix_false_positives.py`
+- Scan network: `utils\scan_network.py`
+- Check IoT devices: `utils\show_iot_devices.py`
+
+### src/
+**Source code** - organized by functionality.
+
+- `api/` - REST API and WebSocket server
+- `models/` - ML/DL prediction engine
+- `network/` - Packet capture and analysis
+- `iot_security/` - IoT device detection
+- `utils/` - Core utilities
+- `frontend/` - React dashboard
+
+### tests/
+**Test scripts** for development and validation.
+
+### notebooks/
+**Jupyter notebooks** for ML model development.
+
+### trained_models/
+**Pre-trained ML/DL models** - ready to use.
+
+### logs/
+**Runtime logs** - alerts, errors, status.
+
+### config/
+**Additional configuration** files.
+
+### myvenv/
+**Python virtual environment** with all dependencies.
+
+## 📊 File Count Comparison
+
+**Before Cleanup:**
+- Root directory: ~25 files
+- docs/ directory: ~64 files
+- **Total: ~90 files** at top level
+
+**After Cleanup:**
+- Root directory: ~10 essential files
+- docs/ directory: ~7 essential guides
+- scripts/: 3 files
+- utils/: 5 files
+- **Total: ~25 files** at top level
+- **Reduction: 72% cleaner!**
+
+## 🎨 Benefits of Clean Structure
+
+### ✅ For Users:
+- **Find startup scripts instantly** - All in root
+- **Clear documentation** - Only what you need
+- **Professional appearance** - Industry standard
+
+### ✅ For Developers:
+- **Easy navigation** - Logical folder structure
+- **Quick file location** - Know where to look
+- **Maintainable** - Clean separation of concerns
+
+### ✅ For Maintenance:
+- **Less clutter** - Focus on essentials
+- **Easier updates** - Know what to modify
+- **Version control friendly** - Less noise in commits
+
+## 🔧 Running the Cleanup
+
+### Option 1: Test First (Dry Run)
+```powershell
+.\CLEANUP_SYSTEM.ps1 -DryRun
+```
+Shows what would be changed without modifying anything.
+
+### Option 2: Run Cleanup
+```batch
+# Double-click
+CLEANUP_SYSTEM.bat
+
+# Or PowerShell
+.\CLEANUP_SYSTEM.ps1
 ```
 
-### Production (Docker)
-```bash
-docker build -t ids-system .
-docker run --cap-add=NET_RAW --cap-add=NET_ADMIN -p 8000:8000 -p 5173:5173 ids-system
+### Option 3: Cleanup Without Archive
+```powershell
+.\CLEANUP_SYSTEM.ps1 -ArchiveOld:$false
+```
+Removes files instead of archiving them.
+
+## 📦 What Happens to Old Files?
+
+All obsolete files are moved to:
+```
+archive_YYYYMMDD_HHMMSS/
+├── docs/          # Old documentation
+└── scripts/       # Old scripts
 ```
 
-## Ports
-- **Backend API**: 8000
-- **Frontend Dashboard**: 5173
+**You can safely delete the archive folder** after verifying everything works!
+
+## ✨ Post-Cleanup
+
+After cleanup, your workflow is simpler:
+
+**Starting the system:**
+```batch
+# From root directory
+START_SYSTEM.bat
+```
+
+**Finding documentation:**
+```
+docs/
+  ├── WINDOWS_SETUP.md          # Setup
+  ├── SYSTEM_STARTUP_GUIDE.md   # Start
+  └── DASHBOARD_SETUP.md        # Dashboard
+```
+
+**Running utilities:**
+```batch
+# From root
+utils\clear_alerts.py
+scripts\build_frontend.bat
+```
+
+## 🎯 Summary
+
+**Clean structure means:**
+- ✅ **10 files** in root (vs 25)
+- ✅ **7 docs** (vs 64)
+- ✅ **Organized folders** (scripts/, utils/)
+- ✅ **Professional appearance**
+- ✅ **Easy to navigate**
+- ✅ **Maintainable**
+
+**Everything you need, nothing you don't!** 🚀

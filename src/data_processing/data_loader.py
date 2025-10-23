@@ -12,15 +12,3 @@ def load_data(file_path):
         return pd.read_json(file_path)
     else:
         raise ValueError("Unsupported file format. Use CSV or JSON.")
-
-def load_cicids_data(data_dir='data'):
-    """
-    Load CICIDS2017 dataset.
-    """
-    data_dir = Path(data_dir)
-    files = list(data_dir.glob('*.csv'))
-    if not files:
-        raise FileNotFoundError("No CSV files found in data directory.")
-    # Load and concatenate all CSV files
-    dfs = [pd.read_csv(f) for f in files]
-    return pd.concat(dfs, ignore_index=True)

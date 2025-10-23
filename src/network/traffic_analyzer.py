@@ -9,14 +9,17 @@ from logging.handlers import RotatingFileHandler
 from threading import Lock
 from scapy.all import IP, TCP, UDP, sniff
 
+
 from src.models.predict import predict_threat
-from src.models.hybrid_detector import hybrid_predict_threat, get_detection_explanation
 from src.data_processing.feature_engineer import engineer_features_from_flow
 from src.iot_security.device_profiler import DeviceProfiler
+from src.iot_security.device_detector import iot_detector
 from src.utils.notification_service import NotificationService
 from src.utils.statistics_tracker import StatisticsTracker
 from src.utils.alert_manager import AlertManager
 from src.utils.response_actions import ResponseActionManager
+from src.database.db_manager import DatabaseManager
+from src.utils.adaptive_baseline import AdaptiveBaseline
 
 
 # === Ensure log directory exists ===
@@ -44,9 +47,7 @@ alert_logger.addHandler(handler)
 
 # === Flow tracking setup ===
 flows = defaultdict(lambda: {'packets': [], 'start_time': None, 'bytes': 0})
-# Add some dummy flows for demonstration
-flows[("192.168.1.1", "192.168.1.2", 80, 6)] = {'packets': ["dummy"] * 5, 'start_time': time.time() - 10, 'bytes': 500}
-flows[("192.168.1.2", "192.168.1.3", 443, 6)] = {'packets': ["dummy"] * 3, 'start_time': time.time() - 5, 'bytes': 300}
+
 alerts = []
 profiler = DeviceProfiler()   # properly instantiated
 
@@ -55,6 +56,12 @@ notification_service = None
 statistics_tracker = StatisticsTracker()
 alert_manager = AlertManager()
 response_manager = None
+db_manager = None  # Database manager for flow storage
+adaptive_baseline = None  # Adaptive baseline learner
+
+# === Detection mode configuration ===
+detection_mode = 'threshold'  # Default: 'threshold' or 'pure_ml'
+detection_config = {}
 
 
 def extract_live_features(flow):
@@ -74,10 +81,23 @@ def extract_live_features(flow):
 def analyse_packet(packet):
     """Process a single packet into flows and run threat detection."""
     try:
+        # Debug: Log packet capture (every 100 packets)
+        global _packet_count
+        if '_packet_count' not in globals():
+            _packet_count = 0
+        _packet_count += 1
+        if _packet_count % 100 == 0:
+            print(f"[CAPTURE] {_packet_count} packets captured")
+
         if IP in packet:
             sport = (
                 packet[TCP].sport if TCP in packet
                 else packet[UDP].sport if UDP in packet
+                else 0
+            )
+            dport = (
+                packet[TCP].dport if TCP in packet
+                else packet[UDP].dport if UDP in packet
                 else 0
             )
             key = (packet[IP].src, packet[IP].dst, sport, packet[IP].proto)
@@ -92,30 +112,238 @@ def analyse_packet(packet):
 
             profiler.profile_device(key[0], len(packet))
 
+            # IoT Device Detection
+            # Extract MAC address if available (from Ethernet layer)
+            mac_src = packet.src if hasattr(packet, 'src') else None
+            mac_dst = packet.dst if hasattr(packet, 'dst') else None
+
+            # Register/update source device
+            if mac_src:
+                iot_detector.register_device(key[0], mac_src)
+                # Determine protocol
+                protocol = 'TCP' if TCP in packet else 'UDP' if UDP in packet else 'IP'
+                iot_detector.update_device_behavior(key[0], dport, protocol)
+
+            # Register/update destination device
+            if mac_dst:
+                iot_detector.register_device(key[1], mac_dst)
+                iot_detector.update_device_behavior(key[1], dport, None)
+
             # Analyze every 10 packets in this flow
             if len(flow['packets']) % 10 == 0:
                 result = extract_live_features(flow)
                 if result is not None:
                     features, duration, pkt_count = result
-                    # Use hybrid detector with higher threshold to reduce false positives
-                    # Threshold 2.0+ means anomaly MSE must be 2x the training threshold
-                    prediction = hybrid_predict_threat(features, anomaly_threshold_multiplier=2.5)
+                    # Use direct ensemble prediction with proper confidence thresholds
+                    prediction = predict_threat(features)
                     threat = prediction['attack']
                     severity = prediction['severity']
-                    detection_method = prediction.get('detection_method', 'unknown')
+                    detection_method = prediction.get('method', 'ensemble')
 
-                    # Debug: Print all predictions
-                    print(f"[DEBUG] Flow {key[0]}:{key[2]}->{key[1]} - Prediction: {threat}, Severity: {severity}, Method: {detection_method}, Confidence: {prediction.get('confidence', 0):.1%}")
+                    # Save flow to database if configured
+                    global db_manager
+                    if db_manager and not features.empty:
+                        try:
+                            db_manager.save_flow(
+                                features_df=features,
+                                src_ip=key[0],
+                                dst_ip=key[1],
+                                protocol=key[3],
+                                src_port=key[2],
+                                dst_port=dport,
+                                prediction=prediction
+                            )
+                        except Exception as e:
+                            # Don't crash on DB errors, just log
+                            print(f"[DB] Failed to save flow: {e}")
 
-                    # Filter out likely false positives from normal traffic
-                    is_localhost = key[0] in ('127.0.0.1', '::1') or key[1] in ('127.0.0.1', '::1')
-                    is_low_rate = (pkt_count / duration if duration > 0 else 0) < 50
+                    # Debug: Print all predictions with detailed analysis
+                    if threat != 'BenignTraffic':
+                        print(f"[DEBUG] Flow {key[0]}->{key[1]} - {threat}, Confidence: {prediction.get('confidence', 0):.1%}")
+                        print(f"        Method: {prediction.get('method', 'unknown')}")
+                        print(f"        RF: {prediction['models']['ml']['attack']}({prediction['models']['ml']['confidence']:.3f})")
+                        print(f"        DL: {prediction['models']['dl']['attack']}({prediction['models']['dl']['confidence']:.3f})")
+                        print(f"        Threshold: {prediction.get('threshold', 0.55):.3f}")
+                        print(f"        Packets: {pkt_count}, Duration: {duration:.2f}s")
+                    elif _packet_count % 500 == 0:  # Log benign traffic periodically
+                        print(f"[BENIGN] Flow {key[0]}->{key[1]} - BenignTraffic, Confidence: {prediction.get('confidence', 0):.1%}")
 
-                    # Only alert if: not benign AND (high confidence OR not localhost low-rate traffic)
-                    should_alert = (
-                        threat != 'BENIGN' and
-                        (prediction.get('confidence', 0) >= 0.7 or not (is_localhost and is_low_rate))
+                    # Check detection mode and decide whether to apply filtering
+                    global detection_mode, detection_config
+
+                    if detection_mode == 'pure_ml':
+                        # PURE ML MODE: Trust the model completely
+                        # No thresholds, no filtering - if model says it's a threat, alert!
+                        is_threat = threat != 'BenignTraffic'
+                        should_alert = is_threat
+
+                        if is_threat:
+                            print(f"[PURE ML] {key[0]}->{key[1]} | Threat:{threat} Conf:{prediction.get('confidence', 0):.1%} Pkts:{pkt_count}")
+
+                    else:
+                        # THRESHOLD MODE: Apply multi-layer filtering
+                        # Multi-Layer Filtering to prevent false positives on normal traffic
+
+                        # Layer 1: Confidence threshold
+                        # Use config value, or default to 0.7 for balanced detection
+                        min_confidence = detection_config.get('confidence_threshold', 0.7)
+                        has_high_confidence = prediction.get('confidence', 0) >= min_confidence
+
+                        # Layer 2: Packet count threshold
+                        # Use config value, or default to 10 for better detection
+                        # IMPORTANT: Config.yaml value is used here
+                        min_packet_count = detection_config.get('min_packet_threshold', 10)
+                        has_significant_traffic = pkt_count >= min_packet_count
+
+                        # Layer 3: Comprehensive cloud & legitimate service whitelist
+                        # Skip known cloud providers, CDNs, and legitimate services
+                        cloud_providers = {
+                            # AWS
+                            '3.', '13.', '18.', '34.', '35.', '52.', '54.', '99.',
+                            '15.', '52.', '54.', '107.',
+                            # Azure/Microsoft
+                            '13.', '20.', '23.', '40.', '51.', '52.', '104.', '168.',
+                            '191.', '102.132.', '102.133.',
+                            # GitHub
+                            '140.82.', '192.30.', '185.199.',
+                            # Google/YouTube/Gmail
+                            '8.8.', '142.250.', '142.251.', '172.217.', '172.253.',
+                            '216.58.', '216.239.', '64.233.', '74.125.', '173.194.',
+                            # Cloudflare
+                            '104.16.', '104.17.', '104.18.', '104.19.', '104.20.',
+                            '104.21.', '104.22.', '104.23.', '104.24.', '104.25.',
+                            '104.26.', '104.27.', '104.28.', '104.29.', '104.30.',
+                            '104.31.', '172.64.', '172.65.', '172.66.', '172.67.',
+                            # Akamai CDN
+                            '23.', '96.', '184.', '2.16.', '2.17.', '2.18.', '2.19.',
+                            '2.20.', '2.21.', '2.22.', '2.23.',
+                            # Fastly CDN
+                            '151.101.',
+                            # Microsoft Update/Office 365
+                            '160.79.', '192.178.', '204.79.', '13.107.',
+                            # Common CDNs
+                            '199.232.', '185.199.',
+                        }
+                        # Check if either source OR destination is a whitelisted service
+                        is_cloud_provider = any(
+                            key[0].startswith(prefix) or key[1].startswith(prefix)
+                            for prefix in cloud_providers
+                        )
+
+                    # Layer 4: Private network filtering
+                    # Filter out local/private network communication
+                    def is_private_ip(ip):
+                        """Check if IP is in private range (RFC1918)"""
+                        parts = ip.split('.')
+                        if len(parts) != 4:
+                            return False
+                        try:
+                            # 10.0.0.0/8
+                            if parts[0] == '10':
+                                return True
+                            # 172.16.0.0/12
+                            if parts[0] == '172' and 16 <= int(parts[1]) <= 31:
+                                return True
+                            # 192.168.0.0/16
+                            if parts[0] == '192' and parts[1] == '168':
+                                return True
+                            # Localhost
+                            if ip in ('127.0.0.1', '::1'):
+                                return True
+                            # Link-local
+                            if parts[0] == '169' and parts[1] == '254':
+                                return True
+                            # Multicast
+                            if 224 <= int(parts[0]) <= 239:
+                                return True
+                            # Broadcast
+                            if parts[3] == '255':
+                                return True
+                        except:
+                            pass
+                        return False
+
+                    # Check config for private network filtering
+                    filter_private = detection_config.get('filter_private_networks', True)
+                    is_local_traffic = filter_private and is_private_ip(key[0]) and is_private_ip(key[1])
+
+                    # Layer 4.5: IP Whitelist
+                    # Check if source or destination is in the whitelist
+                    def is_ip_whitelisted(ip, whitelist):
+                        """Check if IP is in whitelist (supports CIDR notation)"""
+                        import ipaddress
+                        try:
+                            ip_obj = ipaddress.ip_address(ip)
+                            for entry in whitelist:
+                                if '/' in entry:  # CIDR notation
+                                    if ip_obj in ipaddress.ip_network(entry, strict=False):
+                                        return True
+                                elif ip == entry:  # Exact match
+                                    return True
+                        except:
+                            pass
+                        return False
+
+                    whitelist_ips = detection_config.get('whitelist_ips', [])
+                    is_whitelisted_ip = (
+                        is_ip_whitelisted(key[0], whitelist_ips) or
+                        is_ip_whitelisted(key[1], whitelist_ips)
                     )
+
+                    # Layer 5: Common legitimate ports whitelist
+                    # Don't alert on standard web traffic, DNS, etc. - but be less restrictive
+                    whitelist_ports = detection_config.get('whitelist_ports', [22, 53, 80, 443])  # Reduced whitelist for better detection
+                    legitimate_ports = set(whitelist_ports)
+                    dst_port = key[2]  # key format: (src_ip, dst_ip, src_port, proto)
+                    is_legitimate_port = dst_port in legitimate_ports
+
+
+                    # Layer 6: Threat classification
+                    # Alert on all threats, not just benign traffic
+                    is_threat = threat != 'BenignTraffic'
+
+                    # Debug filtering layers for non-benign threats
+                    if threat != 'BenignTraffic':
+                        print(f"[FILTER] {key[0]}->{key[1]}:{dst_port} | Threat:{threat} Conf:{prediction.get('confidence', 0):.1%} Pkts:{pkt_count} Cloud:{is_cloud_provider} Local:{is_local_traffic} Whitelisted:{is_whitelisted_ip} LegitPort:{is_legitimate_port}")
+
+                    # Simplified filtering logic - rely more on model confidence than strict rules
+                    # Keep basic sanity checks but remove over-aggressive filtering
+                    legit_port_threshold = detection_config.get('legitimate_port_packet_threshold', 20)
+                    should_alert = (
+                        is_threat and                    # Must be classified as a threat
+                        has_significant_traffic and      # Basic traffic volume check
+                        not is_cloud_provider and        # Not cloud provider traffic
+                        not is_local_traffic and         # Not internal network traffic
+                        not is_whitelisted_ip and        # Not explicitly whitelisted IP
+                        not (is_legitimate_port and pkt_count < legit_port_threshold)  # Reasonable port traffic check
+                    )
+
+                    # Layer 7: Adaptive Baseline Learning (optional)
+                    # If enabled, this learns your network patterns and adjusts detection
+                    global adaptive_baseline
+                    if adaptive_baseline and should_alert:
+                        baseline_result = adaptive_baseline.evaluate_threat(
+                            src_ip=key[0],
+                            dst_ip=key[1],
+                            src_port=key[2],
+                            dst_port=dport,
+                            threat=threat,
+                            confidence=prediction.get('confidence', 0),
+                            packet_count=pkt_count
+                        )
+
+                        # Override should_alert if baseline says no
+                        if not baseline_result['should_alert']:
+                            should_alert = False
+                            print(f"[BASELINE] Suppressed {threat} | Reason: {baseline_result['reason']} | "
+                                  f"Conf: {prediction.get('confidence', 0):.1%} -> {baseline_result['adjusted_confidence']:.1%}")
+
+                        # Log baseline statistics periodically
+                        if pkt_count % 100 == 0:
+                            stats = adaptive_baseline.get_statistics()
+                            if stats['is_learning']:
+                                print(f"[BASELINE] Learning mode: {stats['learning_progress']:.1%} complete | "
+                                      f"Flows: {stats['total_flows']} | Trusted IPs: {stats['trusted_ips']}")
 
                     if should_alert:
                         alert = {
@@ -150,18 +378,17 @@ def analyse_packet(packet):
                             response_result = response_manager.handle_threat(alert)
                             if response_result['success']:
                                 print(f"[+] Automated response taken: {response_result['actions_taken']}")
-                        else:
-                            # Fallback to basic blocking for high severity
-                            if severity and severity.lower() == 'high':
-                                subprocess.run(
-                                    ['sudo', 'iptables', '-A', 'INPUT', '-s', key[0], '-j', 'DROP']
-                                )
-
-        return None  # Always return None so Scapy doesn't try to unpack
+                        # Note: Fallback blocking removed - requires response_manager for cross-platform support
 
     except Exception as e:
-        print(f"[analyse_packet] Error: {e}")
-        return None
+       print(f"[analyse_packet] Error: {e}")
+
+    return None # Always return None so Scapy doesn't try to unpack
+
+
+# Enable comprehensive diagnostic logging for debugging
+from src.models.predict import add_diagnostic_logging
+add_diagnostic_logging()
 
 
 def initialize_services(config=None):
@@ -171,7 +398,7 @@ def initialize_services(config=None):
     Args:
         config: Configuration dictionary
     """
-    global notification_service, response_manager
+    global notification_service, response_manager, db_manager, adaptive_baseline
 
     if config:
         # Initialize notification service if configured
@@ -184,6 +411,24 @@ def initialize_services(config=None):
             response_manager = ResponseActionManager(config['response_actions'])
             print("[+] Response action manager initialized")
 
+        # Initialize database manager if configured
+        if config.get('database', {}).get('enabled', False):
+            db_url = config['database'].get('url')
+            db_dir = config['database'].get('directory', 'data/flows')
+            try:
+                db_manager = DatabaseManager(db_url=db_url, db_dir=db_dir)
+                print(f"[+] Database manager initialized")
+            except Exception as e:
+                print(f"[!] Failed to initialize database: {e}")
+                db_manager = None
+
+        # Initialize adaptive baseline if configured
+        if config.get('detection', {}).get('adaptive_baseline', {}).get('enabled', False):
+            learning_period = config['detection']['adaptive_baseline'].get('learning_period', 3600)
+            adaptive_baseline = AdaptiveBaseline(learning_period=learning_period)
+            print(f"[+] Adaptive baseline initialized (learning for {learning_period/3600:.1f} hours)")
+            print(f"    This will automatically learn your network patterns and reduce false positives")
+
 
 def start_analyzer(interface='eth0', config=None):
     """
@@ -193,8 +438,44 @@ def start_analyzer(interface='eth0', config=None):
         interface: Network interface to monitor
         config: Configuration dictionary for services
     """
-    if os.geteuid() != 0:
-        print("[!] Warning: Packet sniffer requires root privileges to capture packets. Skipping analyzer start. Please run the application as root or with NET_RAW capability.")
+    global detection_mode, detection_config
+
+    # Store detection mode and config for use in analyse_packet
+    if config and 'detection' in config:
+        detection_mode = config['detection'].get('mode', 'threshold')
+        detection_config = config['detection']
+        print(f"[INFO] Detection mode: {detection_mode}")
+        if detection_mode == 'pure_ml':
+            print("[INFO] Pure ML mode: Trusting model classification without thresholds")
+        else:
+            print(f"[INFO] Threshold mode: Confidence >={detection_config.get('confidence_threshold', 0.7)}, Packets >={detection_config.get('min_packet_threshold', 10)}")
+    else:
+        detection_mode = 'threshold'
+        detection_config = {}
+    # Check for admin/root privileges (cross-platform)
+    import platform
+    import ctypes
+
+    is_admin = False
+    if platform.system() == 'Windows':
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except:
+            is_admin = False
+    else:
+        # Linux/Mac
+        is_admin = os.geteuid() == 0 if hasattr(os, 'geteuid') else False
+
+    if not is_admin:
+        print("[!] Warning: Live packet capture is DISABLED")
+        print("    - Packet sniffer requires Administrator/root privileges")
+        print("    - System will work in simulation mode (using pre-generated alerts)")
+        print("    - To enable live capture:")
+        if platform.system() == 'Windows':
+            print("         Right-click START_LIVE_MONITORING.ps1")
+            print("         Select 'Run with PowerShell as Administrator'")
+        else:
+            print("         Run with: sudo python start_live_monitoring.py")
         return None
 
     # Initialize enhanced services

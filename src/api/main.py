@@ -7,8 +7,8 @@ import logging
 import yaml
 from pathlib import Path
 from src.api.endpoints import router
-from src.network.traffic_analyzer import alerts, start_analyzer
-from src.network.packet_sniffer import get_active_interface
+from src.network.traffic_analyzer import alerts, start_analyzer, alert_manager
+from src.network.packet_sniffer import get_active_interface, get_network_interfaces
 from src.utils.helpers import setup_logging
 
 # Setup logging
@@ -24,13 +24,45 @@ def load_config(config_path='config.yaml'):
         logger.error(f"Failed to load config: {e}")
         return {}
 
-config = load_config()
+# Check for custom config path from environment variable or use default
+import os
+config_path = os.environ.get('CONFIG_PATH', 'config.yaml')
+logger.info(f"Loading configuration from: {config_path}")
+config = load_config(config_path)
 
 app = FastAPI(
     title="IDS & IoT Security System",
     description="Real-time threat detection and monitoring system",
     version="1.0.0"
 )
+
+# Display network interface information on startup
+@app.on_event("startup")
+async def startup_event():
+    """Display network interface information when the server starts."""
+    try:
+        interfaces = get_network_interfaces()
+        logger.info("=" * 60)
+        logger.info("Network Interface Information:")
+        logger.info("=" * 60)
+
+        for iface in interfaces:
+            iface_type = "LOOPBACK" if iface['is_loopback'] else "EXTERNAL"
+            logger.info(f"[{iface_type}] {iface['description']}")
+            logger.info(f"  IP Address: {iface['ip']}")
+            logger.info(f"  MAC Address: {iface['mac']}")
+            logger.info(f"  Network: {iface['network']}")
+            logger.info("-" * 60)
+
+        external_ips = [iface['ip'] for iface in interfaces if not iface['is_loopback']]
+        if external_ips:
+            logger.info(f"External IP addresses: {', '.join(external_ips)}")
+        else:
+            logger.info("No external IP addresses found (only loopback)")
+
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"Failed to display network interface info: {e}")
 
 # Add CORS middleware to allow frontend to access API
 app.add_middleware(
@@ -86,11 +118,18 @@ flows_manager = ConnectionManager()
 @app.websocket('/ws/alerts')
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    last_alert_count = 0
     try:
         while True:
-            await asyncio.sleep(5) # poll for new alerts
-            if alerts:
-                await manager.broadcast(alerts[-1]) # send latest alert
+            await asyncio.sleep(1)  # Check for new alerts every second
+            # Get alerts from alert_manager (the source of truth)
+            current_alerts = alert_manager.get_alerts(limit=1)
+            current_count = alert_manager.alert_counter
+
+            # If there's a new alert, broadcast it
+            if current_count > last_alert_count and current_alerts:
+                await manager.broadcast(current_alerts[0])  # Send the latest alert
+                last_alert_count = current_count
     except:
         manager.disconnect(websocket)
 

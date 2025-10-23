@@ -2,7 +2,7 @@ pandas
 numpy
 matplotlib
 seaborn
-scikit-learn
+scikit-learn==1.6.1==1.6.1
 scapy
 tensorflow
 torch
@@ -19,3 +19,8 @@ websockets
 twilio
 python-dotenv
 psutil
+tqdm
+xgboost
+lightgbm
+optuna
+sqlalchemy>=2.0.0

@@ -9,6 +9,31 @@ def get_active_interface():
             return i
     return '\\Device\\NPF_Loopback'  # Fallback to loopback
 
+def get_network_interfaces():
+    """
+    Get information about all network interfaces.
+    Returns a list of interfaces with their names, IPs, MACs, and network info.
+    """
+    interfaces = []
+    for iface_name in conf.ifaces.data.keys():
+        iface = conf.ifaces[iface_name]
+
+        # Skip interfaces without IP addresses or with invalid IPs
+        if not iface.ip or iface.ip in ('0.0.0.0',):
+            continue
+
+        interface_info = {
+            'name': iface_name,
+            'description': iface.description if hasattr(iface, 'description') else iface_name,
+            'ip': iface.ip,
+            'mac': iface.mac if hasattr(iface, 'mac') else 'N/A',
+            'network': iface.network_name if hasattr(iface, 'network_name') else 'N/A',
+            'is_loopback': iface.ip in ('127.0.0.1', '::1'),
+        }
+        interfaces.append(interface_info)
+
+    return interfaces
+
 SHOW_PAYLOADS = False
 
 def format_payload(raw_data, length=16):
