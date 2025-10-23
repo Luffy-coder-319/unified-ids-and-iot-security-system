@@ -53,42 +53,13 @@ function App() {
     <div className="bg-slate-900 text-slate-100 font-sans flex min-h-screen">
       {/* Sidebar */}
       <aside className="w-56 bg-slate-800 p-4 h-screen fixed">
-        <h2 className="text-green-500 text-center text-xl font-bold mb-6">UCS</h2>
-        <ul className="list-none p-0">
-          <li
-            onClick={() => setActiveTab('dashboard')}
-            className={`p-2.5 m-2 rounded-md cursor-pointer transition-colors ${
-              activeTab === 'dashboard' ? 'bg-blue-600' : 'bg-slate-700 hover:bg-blue-600'
-            }`}
-          >
-            <div className='flex items-center gap-2'><MdOutlineMonitorHeart fill='lightgreen' size={'50px'} /> <span>Dashboard</span></div>
-          </li>
-          <li
-            onClick={() => setActiveTab('devices')}
-            className={`p-2.5 m-2 rounded-md cursor-pointer transition-colors ${
-              activeTab === 'devices' ? 'bg-blue-600' : 'bg-slate-700 hover:bg-blue-600'
-            }`}
-          >
-           <div className='flex items-center gap-2'><LuRadioTower fill='black' size={'50px'} /> <span>IoT Devices </span></div>
-            {stats.iotDevices > 0 && (
-              <span className="ml-2 bg-green-500 text-white text-xs px-2 py-0.5 rounded-full">
-                {stats.iotDevices}
-              </span>
-            )}
-          </li>
-          <li
-            onClick={() => setActiveTab('alerts')}
-            className={`p-2.5 m-2 rounded-md cursor-pointer transition-colors ${
-              activeTab === 'alerts' ? 'bg-blue-600' : 'bg-slate-700 hover:bg-blue-600'
-            }`}
-          >
-           <div className='flex items-center gap-2'><FiAlertTriangle fill='red' size={'50px'} /> <span> Alerts</span></div>
-            {stats.threats > 0 && (
-              <span className="ml-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
-                {stats.threats}
-              </span>
-            )}
-          </li>
+        <h2 className="text-green-500 text-center text-xl font-bold">UCS</h2>
+        <ul className="list-none p-0 mt-4">
+          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">📊 Dashboard</li>
+          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">🖥 Devices</li>
+          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">⚠️ Threat Logs</li>
+          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">📑 Reports</li>
+          <li className="p-2.5 m-2 bg-slate-700 rounded-md cursor-pointer transition-colors hover:bg-blue-600">⚙ Settings</li>
         </ul>
       </aside>
 
