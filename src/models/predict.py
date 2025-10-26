@@ -6,6 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import threading
 
 # Suppress TensorFlow messages BEFORE importing tensorflow
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=all, 1=no INFO, 2=no WARNING, 3=no INFO/WARNING/ERROR except Python
@@ -67,17 +68,148 @@ ENSEMBLE_WEIGHTS = {
 }
 OPTIMAL_THRESHOLD = 0.4  # Lowered from 0.55 for better detection
 
+# Clipping configuration (short-term mitigation for extreme z-scores)
+CLIP_ENABLED = os.getenv('PREDICTION_CLIP_ENABLED', '1') == '1'
+try:
+    CLIP_Z = float(os.getenv('PREDICTION_CLIP_Z', '5.0'))
+except Exception:
+    CLIP_Z = 5.0
+
 # Global model cache
 _model_cache = {}
+_model_cache_lock = threading.Lock()
 
 
 #Utility Functions
 
 def get_cached_model(key, loader_fn):
-    """Cache models or scalers to speed up repeated inference."""
+    """Thread-safe cache models or scalers to speed up repeated inference."""
+    # Double-checked locking to avoid multiple loads
     if key not in _model_cache:
-        _model_cache[key] = loader_fn()
+        with _model_cache_lock:
+            if key not in _model_cache:
+                _model_cache[key] = loader_fn()
     return _model_cache[key]
+
+
+def runtime_sanity_check(verbose: bool = True) -> bool:
+    """
+    Perform quick runtime sanity checks:
+      - required files (feature_info, scaler, models) exist
+      - feature list in feature_info.json matches the feature engineer's list
+
+    Returns True if checks pass, False otherwise.
+    """
+    issues = []
+    paths = {
+        'feature_info': FEATURE_INFO_PATH,
+        'scaler': SCALER_PATH,
+        'dl_model': DL_MODEL_PATH,
+        'rf_model': RF_MODEL_PATH,
+    }
+
+    for name, p in paths.items():
+        try:
+            if not p.exists():
+                issues.append(f"Missing {name}: {p}")
+        except Exception as e:
+            issues.append(f"Error checking {name} at {p}: {e}")
+
+    # Compare feature list with feature_engineer
+    try:
+        from src.data_processing.feature_engineer import get_feature_names as _fe_get
+        fe_names = _fe_get()
+        # Load model feature info if available
+        model_feats = []
+        if FEATURE_INFO_PATH.exists():
+            with open(FEATURE_INFO_PATH, 'r') as f:
+                fi = json.load(f)
+                model_feats = fi.get('feature_names', [])
+
+        if model_feats and fe_names and model_feats != fe_names:
+            issues.append("Feature name/order mismatch between feature_info.json and feature_engineer.get_feature_names()")
+    except Exception as e:
+        issues.append(f"Failed to compare feature lists: {e}")
+
+    if issues:
+        if verbose:
+            logger.warning("Runtime sanity check found issues:")
+            for it in issues:
+                logger.warning("  - %s", it)
+            logger.warning("Proceeding in degraded/simulation mode. Fix the issues to enable full live inference.")
+        return False
+
+    if verbose:
+        logger.info("Runtime sanity check passed: feature info, scaler, and model files appear present and consistent.")
+    return True
+
+
+def _scale_and_clip(X_df):
+    """Scale DataFrame with the configured scaler and apply clipping to z-scores.
+
+    Returns a numpy array (scaled). Raises if scaler cannot be loaded.
+    """
+    scaler = get_cached_model('scaler', lambda: joblib.load(SCALER_PATH))
+    X_scaled = scaler.transform(X_df)
+    if CLIP_ENABLED:
+        # Count clipped entries for logging
+        clipped = np.abs(X_scaled) > CLIP_Z
+        n_clipped = int(np.sum(clipped))
+        if n_clipped > 0:
+            logger.info(f"Applied z-score clipping: {n_clipped} values clipped to +/-{CLIP_Z}")
+        X_scaled = np.clip(X_scaled, -CLIP_Z, CLIP_Z)
+    return X_scaled
+
+
+def eager_load_models(verbose: bool = True) -> bool:
+    """
+    Eagerly load scaler and models into the cache. Returns True if loads succeed.
+    """
+    success = True
+    try:
+        # Load scaler
+        get_cached_model('scaler', lambda: joblib.load(SCALER_PATH))
+    except Exception as e:
+        success = False
+        logger.error(f"Eager load failed for scaler: {e}")
+
+    try:
+        # Load RF
+        get_cached_model('rf_model', lambda: joblib.load(RF_MODEL_PATH))
+    except Exception as e:
+        success = False
+        logger.error(f"Eager load failed for RF model: {e}")
+
+    try:
+        # Load DL model
+        get_cached_model('dl_model', lambda: load_model(DL_MODEL_PATH, custom_objects={'focal_loss_fixed': focal_loss_fixed, 'focal_loss': focal_loss}))
+    except Exception as e:
+        success = False
+        logger.error(f"Eager load failed for DL model: {e}")
+
+    if verbose:
+        if success:
+            logger.info("Eager model loading succeeded")
+        else:
+            logger.warning("Eager model loading encountered errors; see logs")
+    return success
+
+
+if __name__ == '__main__':
+    import argparse
+
+    p = argparse.ArgumentParser(description='Model predict utilities')
+    p.add_argument('--sanity-check', action='store_true', help='Run runtime sanity checks')
+    p.add_argument('--eager-load', action='store_true', help='Eagerly load models into cache')
+    args = p.parse_args()
+
+    if args.sanity_check:
+        ok = runtime_sanity_check(verbose=True)
+        raise SystemExit(0 if ok else 2)
+
+    if args.eager_load:
+        ok = eager_load_models(verbose=True)
+        raise SystemExit(0 if ok else 3)
 
 
 def load_class_mapping():
@@ -159,11 +291,10 @@ def classify_ml(features):
     """Classify attack type using calibrated Random Forest model."""
     try:
         model = get_cached_model('rf_model', lambda: joblib.load(RF_MODEL_PATH))
-        scaler = get_cached_model('scaler', lambda: joblib.load(SCALER_PATH))
         class_mapping = get_cached_model('class_mapping', load_class_mapping)
 
         X_df = _validate_features(features, return_dataframe=True)
-        X_scaled = scaler.transform(X_df)
+        X_scaled = _scale_and_clip(X_df)
 
         # Get predictions
         preds = model.predict(X_scaled)
@@ -204,11 +335,10 @@ def classify_dl(features):
             'focal_loss_fixed': focal_loss_fixed,
             'focal_loss': focal_loss
         }))
-        scaler = get_cached_model('scaler', lambda: joblib.load(SCALER_PATH))
         class_mapping = get_cached_model('class_mapping', load_class_mapping)
 
         X_df = _validate_features(features, return_dataframe=True)
-        X_scaled = scaler.transform(X_df)
+        X_scaled = _scale_and_clip(X_df)
 
         # Get predictions
         predictions = model.predict(X_scaled, verbose=0)
@@ -364,3 +494,121 @@ def add_diagnostic_logging():
     globals()['combine_predictions'] = combine_predictions_with_logging
 
     logger.info("Diagnostic logging enabled for ensemble predictions")
+
+
+def diagnose_prediction(features):
+    """
+    Run a detailed diagnostic for a single feature vector or DataFrame row.
+
+    Returns a dictionary with:
+      - raw_features: original feature values (dict)
+      - scaled_features: values after scaler.transform (list)
+      - rf: {label, confidence, proba}
+      - dl: {label, confidence, proba}
+      - weighted_confidence: combined weighted confidence
+      - threshold: OPTIMAL_THRESHOLD
+      - threshold_pass: bool whether weighted_conf >= threshold
+      - ensemble: result of combine_predictions (full dict)
+
+    The function is defensive: if a model or scaler cannot be loaded it will include
+    an "error" field for that model and still return any available information.
+    """
+    result = {
+        'raw_features': None,
+        'scaled_features': None,
+        'rf': None,
+        'dl': None,
+        'weighted_confidence': None,
+        'threshold': OPTIMAL_THRESHOLD,
+        'threshold_pass': None,
+        'ensemble': None,
+        'errors': []
+    }
+
+    try:
+        X_df = _validate_features(features, return_dataframe=True)
+    except Exception as e:
+        result['errors'].append(f"feature_validation_failed: {e}")
+        return result
+
+    # Record raw features
+    try:
+        result['raw_features'] = X_df.iloc[0].to_dict()
+    except Exception:
+        result['errors'].append('failed_to_serialize_raw_features')
+
+    # Attempt to scale
+    scaler = None
+    try:
+        X_scaled = _scale_and_clip(X_df)
+        result['scaled_features'] = X_scaled[0].astype(float).tolist()
+    except Exception as e:
+        result['errors'].append(f'scaler_error: {e}')
+        X_scaled = None
+
+    # Random Forest prediction
+    try:
+        rf = get_cached_model('rf_model', lambda: joblib.load(RF_MODEL_PATH))
+        if X_scaled is None:
+            # Try to transform without scaler (not recommended)
+            try:
+                X_scaled = X_df.values
+            except Exception:
+                X_scaled = None
+
+        if X_scaled is not None:
+            rf_preds = rf.predict(X_scaled)
+            rf_proba = rf.predict_proba(X_scaled)[0].astype(float).tolist()
+            rf_label = get_cached_model('class_mapping', load_class_mapping).get(int(rf_preds[0]), 'Unknown')
+            rf_conf = float(max(rf_proba))
+            result['rf'] = {'label': rf_label, 'confidence': rf_conf, 'proba': rf_proba}
+        else:
+            result['rf'] = {'error': 'no_scaled_features'}
+    except Exception as e:
+        result['rf'] = {'error': str(e)}
+        result['errors'].append(f'rf_error: {e}')
+
+    # Deep Learning prediction
+    try:
+        dl = get_cached_model('dl_model', lambda: load_model(DL_MODEL_PATH, custom_objects={'focal_loss_fixed': focal_loss_fixed, 'focal_loss': focal_loss}))
+        if X_scaled is None:
+            try:
+                X_scaled = X_df.values
+            except Exception:
+                X_scaled = None
+
+        if X_scaled is not None:
+            dl_preds = dl.predict(X_scaled, verbose=0)
+            dl_proba = dl_preds[0].astype(float).tolist()
+            dl_index = int(np.argmax(dl_preds, axis=1)[0])
+            dl_label = get_cached_model('class_mapping', load_class_mapping).get(dl_index, 'Unknown')
+            dl_conf = float(max(dl_proba))
+            result['dl'] = {'label': dl_label, 'confidence': dl_conf, 'proba': dl_proba}
+        else:
+            result['dl'] = {'error': 'no_scaled_features'}
+    except Exception as e:
+        result['dl'] = {'error': str(e)}
+        result['errors'].append(f'dl_error: {e}')
+
+    # Compute weighted confidence if both model confidences available
+    try:
+        rf_conf = result['rf'].get('confidence') if isinstance(result.get('rf'), dict) else None
+        dl_conf = result['dl'].get('confidence') if isinstance(result.get('dl'), dict) else None
+        if rf_conf is not None and dl_conf is not None:
+            weighted_conf = (rf_conf * ENSEMBLE_WEIGHTS.get('random_forest', 0.5)) + (dl_conf * ENSEMBLE_WEIGHTS.get('deep_learning', 0.5))
+            result['weighted_confidence'] = float(weighted_conf)
+            result['threshold_pass'] = weighted_conf >= OPTIMAL_THRESHOLD
+        else:
+            result['weighted_confidence'] = None
+            result['threshold_pass'] = None
+    except Exception as e:
+        result['errors'].append(f'weighted_conf_error: {e}')
+
+    # Full ensemble decision (may already load models but is useful for consistency)
+    try:
+        ensemble = combine_predictions(features)
+        result['ensemble'] = ensemble
+    except Exception as e:
+        result['errors'].append(f'ensemble_error: {e}')
+
+    return result

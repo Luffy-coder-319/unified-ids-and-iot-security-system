@@ -13,6 +13,7 @@ from pathlib import Path
 import joblib
 import json
 import os
+import threading
 
 # Suppress TensorFlow messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -74,6 +75,14 @@ class ModelEnsemble:
 
         # Model cache
         self._model_cache = {}
+        self._model_cache_lock = threading.Lock()
+
+        # Clipping configuration (mirrors behavior in src.models.predict)
+        self.clip_enabled = os.getenv('PREDICTION_CLIP_ENABLED', '1') == '1'
+        try:
+            self.clip_z = float(os.getenv('PREDICTION_CLIP_Z', '5.0'))
+        except Exception:
+            self.clip_z = 5.0
 
     def _default_config(self) -> Dict:
         """Default configuration for the ensemble."""
@@ -161,9 +170,11 @@ class ModelEnsemble:
         return X_df
 
     def _get_cached_model(self, key, loader_fn):
-        """Cache models or scalers to speed up repeated inference."""
+        """Thread-safe cache models or scalers to speed up repeated inference."""
         if key not in self._model_cache:
-            self._model_cache[key] = loader_fn()
+            with self._model_cache_lock:
+                if key not in self._model_cache:
+                    self._model_cache[key] = loader_fn()
         return self._model_cache[key]
 
     def predict_with_rf(self, features):
@@ -171,6 +182,8 @@ class ModelEnsemble:
         try:
             X_df = self._validate_features(features)
             X_scaled = self.scaler.transform(X_df)
+            if self.clip_enabled:
+                X_scaled = np.clip(X_scaled, -self.clip_z, self.clip_z)
 
             # Get predictions
             preds = self.rf_model.predict(X_scaled)
@@ -213,6 +226,8 @@ class ModelEnsemble:
         try:
             X_df = self._validate_features(features)
             X_scaled = self.scaler.transform(X_df)
+            if self.clip_enabled:
+                X_scaled = np.clip(X_scaled, -self.clip_z, self.clip_z)
 
             # Get predictions
             predictions = self.dl_model.predict(X_scaled, verbose=0)
