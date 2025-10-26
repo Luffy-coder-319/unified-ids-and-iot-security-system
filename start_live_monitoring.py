@@ -53,6 +53,23 @@ def main():
     # Import after path setup
     from src.network.traffic_analyzer import start_analyzer
     from src.utils.config_loader import load_config
+    # Runtime sanity checks for models/scaler/feature list
+    try:
+        from src.models.predict import runtime_sanity_check, eager_load_models
+        sanity_ok = runtime_sanity_check(verbose=True)
+        if not sanity_ok:
+            print("\n[ERROR] Runtime sanity check failed. Missing or inconsistent model/scaler/feature files.")
+            print("Please ensure 'trained_models/retrained/' contains the required artifacts and that feature_info.json matches the feature engineer.")
+            return 2
+        # Optionally eager-load models to fail fast on load errors
+        try:
+            eager_ok = eager_load_models(verbose=True)
+            if not eager_ok:
+                print("[WARN] Eager model loading had issues; continuing but live inference may fail at runtime.")
+        except Exception:
+            print("[WARN] Eager model loading not available or failed; continuing.")
+    except Exception as e:
+        print(f"[WARN] Could not run runtime sanity check: {e}")
 
     # Load configuration
     config = load_config('config.yaml')
